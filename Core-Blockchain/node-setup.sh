@@ -273,6 +273,18 @@ task6_gpu(){
   
   # Build GPU components
   log_wait "Building CUDA and OpenCL kernels for maximum performance"
+  
+  # Ensure we're in the correct directory (Core-Blockchain)
+  cd $BASE_DIR/Core-Blockchain
+  
+  # Check if node_src directory exists
+  if [ ! -d "node_src" ]; then
+    log_error "node_src directory not found in $(pwd)"
+    log_error "Current directory contents:"
+    ls -la
+    return 1
+  fi
+  
   cd node_src
   
   # Set environment for build
@@ -289,7 +301,8 @@ task6_gpu(){
     echo -e "${ORANGE}System reboot recommended to activate GPU drivers${NC}"
   fi
   
-  cd ../
+  # Return to Core-Blockchain directory
+  cd $BASE_DIR/Core-Blockchain
   log_success "GPU RPC setup completed - High-performance mode ready"
 }
 
