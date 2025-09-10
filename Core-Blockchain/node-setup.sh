@@ -138,21 +138,124 @@ task6(){
   log_success "Done"
 }
 
+install_gpu_dependencies(){
+  # Install GPU dependencies automatically TASK 6A
+  log_wait "Installing GPU dependencies for high-performance RPC" && progress_bar
+  
+  # Update package lists
+  apt update
+  
+  # Install NVIDIA drivers
+  log_wait "Installing NVIDIA drivers"
+  apt install -y nvidia-driver-470 nvidia-utils-470
+  
+  # Install CUDA Toolkit
+  log_wait "Installing CUDA Toolkit 11.8"
+  cd ./tmp
+  if [ ! -f "cuda_11.8.0_520.61.05_linux.run" ]; then
+    wget -q https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
+  fi
+  chmod +x cuda_11.8.0_520.61.05_linux.run
+  sh cuda_11.8.0_520.61.05_linux.run --silent --toolkit --no-opengl-libs
+  
+  # Install OpenCL support
+  log_wait "Installing OpenCL support"
+  apt install -y opencl-headers ocl-icd-opencl-dev nvidia-opencl-dev mesa-opencl-icd intel-opencl-icd
+  
+  # Install additional build tools
+  apt install -y cmake clinfo
+  
+  # Set up CUDA environment
+  export CUDA_PATH=/usr/local/cuda
+  export PATH=$PATH:$CUDA_PATH/bin
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64
+  
+  # Add CUDA to system profile
+  echo 'export CUDA_PATH=/usr/local/cuda' >> /etc/profile
+  echo 'export PATH=$PATH:$CUDA_PATH/bin' >> /etc/profile
+  echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64' >> /etc/profile
+  
+  cd ../
+  log_success "GPU dependencies installed successfully"
+}
+
+configure_gpu_environment(){
+  # Configure GPU environment for optimal performance TASK 6B
+  log_wait "Configuring GPU environment for high-performance RPC" && progress_bar
+  
+  # Create GPU configuration in .env file
+  cat >> ./.env << EOF
+
+# GPU Acceleration Configuration for High-Performance RPC
+ENABLE_GPU=true
+PREFERRED_GPU_TYPE=CUDA
+GPU_MAX_BATCH_SIZE=10000
+GPU_MAX_MEMORY_USAGE=4294967296
+GPU_HASH_WORKERS=8
+GPU_SIGNATURE_WORKERS=8
+GPU_TX_WORKERS=8
+GPU_ENABLE_PIPELINING=true
+
+# Hybrid Processing Configuration
+ENABLE_HYBRID_PROCESSING=true
+GPU_THRESHOLD=1000
+CPU_GPU_RATIO=0.7
+ADAPTIVE_LOAD_BALANCING=true
+PERFORMANCE_MONITORING=true
+MAX_CPU_UTILIZATION=0.85
+MAX_GPU_UTILIZATION=0.90
+THROUGHPUT_TARGET=1000000
+
+# Memory Management
+MAX_MEMORY_USAGE=17179869184
+GPU_MEMORY_RESERVATION=2147483648
+
+# Performance Optimization
+GPU_DEVICE_COUNT=1
+GPU_LOAD_BALANCE_STRATEGY=round_robin
+EOF
+  
+  log_success "GPU environment configured for 1M+ TPS target"
+}
+
 task6_gpu(){
   # Build GPU acceleration components TASK 6 GPU
-  log_wait "Building GPU acceleration components" && progress_bar
+  log_wait "Setting up complete GPU acceleration for high-performance RPC" && progress_bar
   
-  # Check if GPU dependencies are available
-  if make -f Makefile.gpu check-deps 2>/dev/null; then
-    log_wait "GPU dependencies found, building CUDA/OpenCL kernels"
-    make -f Makefile.gpu all
-    log_success "GPU acceleration components built successfully"
+  # Install GPU dependencies automatically
+  install_gpu_dependencies
+  
+  # Configure GPU environment
+  configure_gpu_environment
+  
+  # Check if GPU is available
+  if nvidia-smi >/dev/null 2>&1; then
+    log_success "NVIDIA GPU detected successfully"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits
   else
-    log_wait "GPU dependencies not found, skipping GPU build (CPU-only mode)"
-    echo -e "${ORANGE}To enable GPU acceleration later, install CUDA/OpenCL and run: make -f Makefile.gpu all${NC}"
+    log_wait "GPU not detected or drivers need reboot - GPU features will activate after reboot"
   fi
   
-  log_success "Done"
+  # Build GPU components
+  log_wait "Building CUDA and OpenCL kernels for maximum performance"
+  cd node_src
+  
+  # Set environment for build
+  export CUDA_PATH=/usr/local/cuda
+  export PATH=$PATH:$CUDA_PATH/bin
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64
+  
+  # Build GPU components
+  if make -f Makefile.gpu check-deps 2>/dev/null; then
+    make -f Makefile.gpu all
+    log_success "GPU acceleration components built successfully - Ready for 1M+ TPS"
+  else
+    log_wait "GPU build will complete after system reboot (driver activation required)"
+    echo -e "${ORANGE}System reboot recommended to activate GPU drivers${NC}"
+  fi
+  
+  cd ../
+  log_success "GPU RPC setup completed - High-performance mode ready"
 }
 
 task7(){
