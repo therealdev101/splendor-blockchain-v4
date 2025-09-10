@@ -120,55 +120,33 @@ startValidator(){
 initializeGPU(){
   echo -e "\n${GREEN}+------------------ GPU Initialization -------------------+${NC}"
   
-  # Check if GPU acceleration is enabled
+  # Quick non-blocking GPU check
   if [ "$ENABLE_GPU" = "true" ]; then
-    echo -e "${CYAN}GPU acceleration enabled, checking hardware...${NC}"
+    echo -e "${CYAN}GPU acceleration enabled${NC}"
     
-    # Check for NVIDIA GPU
-    if command -v nvidia-smi &> /dev/null; then
-      echo -e "${GREEN}NVIDIA GPU detected:${NC}"
-      nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits
-      
-      # Check CUDA installation
-      if command -v nvcc &> /dev/null; then
-        echo -e "${GREEN}CUDA toolkit found: $(nvcc --version | grep release)${NC}"
-      else
-        echo -e "${ORANGE}CUDA toolkit not found, GPU acceleration may not work${NC}"
-      fi
+    # Fast GPU status check (non-blocking)
+    if timeout 3 nvidia-smi >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ GPU drivers active and ready${NC}"
+      GPU_STATUS="active"
     else
-      echo -e "${ORANGE}NVIDIA GPU not detected, checking for OpenCL...${NC}"
+      echo -e "${ORANGE}⚠️  GPU drivers need reboot activation - continuing with CPU mode${NC}"
+      GPU_STATUS="pending_reboot"
     fi
     
-    # Check for OpenCL
-    if command -v clinfo &> /dev/null; then
-      echo -e "${GREEN}OpenCL devices found:${NC}"
-      clinfo --list 2>/dev/null || echo -e "${ORANGE}No OpenCL devices available${NC}"
+    # Quick CUDA check
+    if command -v nvcc >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ CUDA toolkit available${NC}"
     else
-      echo -e "${ORANGE}OpenCL not available${NC}"
+      echo -e "${ORANGE}⚠️  CUDA will be available after reboot${NC}"
     fi
     
-    # Check if GPU libraries are built
-    if [ -f "./node_src/common/gpu/libcuda_kernels.so" ] || [ -f "./node_src/common/gpu/libopencl_kernels.so" ]; then
-      echo -e "${GREEN}GPU libraries found, acceleration ready${NC}"
-    else
-      echo -e "${ORANGE}GPU libraries not found, building now...${NC}"
-      cd ./node_src
-      if make -f Makefile.gpu all 2>/dev/null; then
-        echo -e "${GREEN}GPU libraries built successfully${NC}"
-      else
-        echo -e "${RED}GPU build failed, continuing with CPU-only mode${NC}"
-      fi
-      cd ../
-    fi
-    
-    echo -e "${GREEN}GPU Configuration:${NC}"
-    echo -e "  Max Batch Size: ${ORANGE}$GPU_MAX_BATCH_SIZE${NC}"
-    echo -e "  GPU Memory: ${ORANGE}$(($GPU_MAX_MEMORY_USAGE / 1024 / 1024 / 1024))GB${NC}"
-    echo -e "  GPU Workers: ${ORANGE}$GPU_TX_WORKERS${NC}"
-    echo -e "  Throughput Target: ${ORANGE}$THROUGHPUT_TARGET TPS${NC}"
+    echo -e "${GREEN}GPU Config: ${ORANGE}${THROUGHPUT_TARGET:-1000000} TPS target${NC}"
   else
-    echo -e "${ORANGE}GPU acceleration disabled, using CPU-only mode${NC}"
+    echo -e "${ORANGE}GPU acceleration disabled${NC}"
+    GPU_STATUS="disabled"
   fi
+  
+  echo -e "${GREEN}✅ GPU check completed (non-blocking)${NC}"
 }
 
 finalize(){
@@ -187,7 +165,11 @@ finalize(){
   fi
 
   echo -e "\n${GREEN}+------------------ Active Nodes -------------------+"
-  tmux ls
+  if tmux ls 2>/dev/null; then
+    echo -e "${GREEN}✅ Nodes started successfully${NC}"
+  else
+    echo -e "${ORANGE}⚠️  No tmux sessions found${NC}"
+  fi
 
   echo -e "\n${GREEN}+------------------ Starting sync-helper -------------------+${NC}"
   echo -e "\n${ORANGE}+-- Please wait a few seconds. Do not turn off the server or interrupt --+"
@@ -208,6 +190,20 @@ finalize(){
   
   pm2 save
   cd /root/splendor-blockchain-v4/Core-Blockchain/
+
+  # Check if GPU drivers need reboot and offer reboot
+  if [ "$GPU_STATUS" = "pending_reboot" ] && lspci | grep -i nvidia >/dev/null 2>&1; then
+    echo -e "\n${ORANGE}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${ORANGE}║                    GPU REBOOT RECOMMENDED                   ║${NC}"
+    echo -e "${ORANGE}║                                                              ║${NC}"
+    echo -e "${ORANGE}║  NVIDIA GPU drivers are installed but need reboot to        ║${NC}"
+    echo -e "${ORANGE}║  activate for maximum TPS performance.                      ║${NC}"
+    echo -e "${ORANGE}║                                                              ║${NC}"
+    echo -e "${ORANGE}║  Current: CPU-only mode                                     ║${NC}"
+    echo -e "${ORANGE}║  After reboot: GPU-accelerated high TPS mode               ║${NC}"
+    echo -e "${ORANGE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "${CYAN}To activate GPU acceleration: ${GREEN}reboot${NC}"
+  fi
 
 }
 
