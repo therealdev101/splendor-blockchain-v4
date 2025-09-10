@@ -78,9 +78,16 @@ startRpc(){
       if tmux has-session -t node$node_num > /dev/null 2>&1; then
         echo -e "${ORANGE}RPC node$node_num session already exists${NC}"
       else
-        echo -e "${GREEN}Starting RPC node$node_num${NC}"
+        echo -e "${GREEN}Starting RPC node$node_num with optimized resource limits${NC}"
+        
+        # Set resource limits before starting
+        ulimit -n 65536
+        export GOMAXPROCS=20
+        
         tmux new-session -d -s node$node_num
-        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=16384 --cache.database=8192 --cache.trie=4096 --cache.gc=4096 --txpool.accountslots=10000 --txpool.globalslots=2000000 --txpool.accountqueue=10000 --txpool.globalqueue=2000000 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
+        tmux send-keys -t node$node_num "ulimit -n 65536" Enter
+        tmux send-keys -t node$node_num "export GOMAXPROCS=20" Enter
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=5000 --txpool.globalslots=100000 --txpool.accountqueue=5000 --txpool.globalqueue=100000 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
       fi
     fi
   done

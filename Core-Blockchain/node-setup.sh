@@ -34,7 +34,23 @@ task1(){
   # update and upgrade the server TASK 1
   log_wait "Updating system packages" && progress_bar
   apt update && apt upgrade -y
-  log_success "System packages updated"
+  
+  # Fix system resource limits for blockchain node stability
+  log_wait "Configuring system resource limits for blockchain operations"
+  
+  # Increase file descriptor limits
+  echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+  echo "fs.inotify.max_user_watches = 524288" >> /etc/sysctl.conf
+  echo "fs.inotify.max_user_instances = 512" >> /etc/sysctl.conf
+  sysctl -p
+  
+  # Set file descriptor limits for all users
+  echo "* soft nofile 65536" >> /etc/security/limits.conf
+  echo "* hard nofile 65536" >> /etc/security/limits.conf
+  echo "root soft nofile 65536" >> /etc/security/limits.conf
+  echo "root hard nofile 65536" >> /etc/security/limits.conf
+  
+  log_success "System packages updated and resource limits configured"
 }
 
 task2(){
