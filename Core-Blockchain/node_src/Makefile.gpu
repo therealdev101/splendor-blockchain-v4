@@ -16,7 +16,7 @@ OPENCL_INC_PATH ?= /usr/include
 OPENCL_LIB_PATH ?= /usr/lib/x86_64-linux-gnu
 
 # Compiler flags
-NVCC_FLAGS = -O3 -arch=sm_50 -Xcompiler -fPIC
+NVCC_FLAGS = -O3 -arch=sm_50 -Xcompiler -fPIC -allow-unsupported-compiler
 CC_FLAGS = -O3 -fPIC -Wall
 CGO_CFLAGS = -I$(CUDA_INC_PATH) -I$(OPENCL_INC_PATH)
 CGO_LDFLAGS = -L$(CUDA_LIB_PATH) -L$(OPENCL_LIB_PATH) -lcuda -lcudart -lOpenCL
