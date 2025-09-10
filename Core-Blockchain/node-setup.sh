@@ -145,31 +145,47 @@ install_gpu_dependencies(){
   # Update package lists
   apt update
   
-  # Install NVIDIA drivers
-  log_wait "Installing NVIDIA drivers"
-  apt install -y nvidia-driver-470 nvidia-utils-470
+  # Detect GPU and install appropriate NVIDIA drivers
+  log_wait "Detecting GPU hardware"
+  GPU_INFO=$(lspci | grep -i nvidia || echo "No NVIDIA GPU detected")
+  echo "GPU detected: $GPU_INFO"
   
-  # Install CUDA Toolkit
-  log_wait "Installing CUDA Toolkit 11.8"
+  if echo "$GPU_INFO" | grep -q "RTX 4000\|RTX 40\|Ada Generation\|AD104"; then
+    log_wait "Installing NVIDIA drivers for RTX 4000 series (Ada Generation)"
+    apt install -y nvidia-driver-575-open nvidia-utils-575
+  elif echo "$GPU_INFO" | grep -q "RTX 30\|RTX 20\|GTX 16"; then
+    log_wait "Installing NVIDIA drivers for RTX 30/20/GTX 16 series"
+    apt install -y nvidia-driver-535 nvidia-utils-535
+  else
+    log_wait "Installing recommended NVIDIA drivers (auto-detect)"
+    ubuntu-drivers autoinstall || apt install -y nvidia-driver-535 nvidia-utils-535
+  fi
+  
+  # Install CUDA Toolkit compatible with modern drivers
+  log_wait "Installing CUDA Toolkit 12.2 (compatible with RTX 4000 series)"
   
   # Ensure tmp directory exists
   mkdir -p ./tmp
   cd ./tmp
   
-  if [ ! -f "cuda_11.8.0_520.61.05_linux.run" ]; then
-    log_wait "Downloading CUDA Toolkit (this may take several minutes)..."
-    wget --progress=bar:force https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
+  # Use CUDA 12.2 which is compatible with driver 575
+  CUDA_INSTALLER="cuda_12.2.0_535.54.03_linux.run"
+  CUDA_URL="https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/$CUDA_INSTALLER"
+  
+  if [ ! -f "$CUDA_INSTALLER" ]; then
+    log_wait "Downloading CUDA Toolkit 12.2 (this may take several minutes)..."
+    wget --progress=bar:force "$CUDA_URL"
     log_success "CUDA Toolkit download completed"
   else
     log_success "CUDA Toolkit installer already exists"
   fi
   
-  log_wait "Installing CUDA Toolkit (this may take 5-10 minutes)..."
-  chmod +x cuda_11.8.0_520.61.05_linux.run
+  log_wait "Installing CUDA Toolkit 12.2 (this may take 5-10 minutes)..."
+  chmod +x "$CUDA_INSTALLER"
   
   # Run with verbose output instead of silent
-  if sh cuda_11.8.0_520.61.05_linux.run --toolkit --no-opengl-libs --override --verbose 2>&1 | tee cuda_install.log; then
-    log_success "CUDA Toolkit installation completed"
+  if sh "$CUDA_INSTALLER" --toolkit --no-opengl-libs --override --verbose 2>&1 | tee cuda_install.log; then
+    log_success "CUDA Toolkit 12.2 installation completed"
   else
     log_error "CUDA Toolkit installation failed - check cuda_install.log for details"
     tail -20 cuda_install.log
