@@ -18,6 +18,33 @@ totalNodes=$(($totalRpc + $totalValidator))
 isRPC=false
 isValidator=false
 
+#Logger setup
+
+log_step() {
+  echo -e "${CYAN}➜ ${GREEN}$1${NC}"
+}
+
+log_success() {
+  echo -e "${GREEN}✔ $1${NC}"
+}
+
+log_error() {
+  echo -e "${RED}✖ $1${NC}"
+}
+
+log_wait() {
+  echo -e "${CYAN}🕐 $1...${NC}"
+}
+
+progress_bar() {
+  echo -en "${CYAN}["
+  for i in {1..60}; do
+    echo -en "#"
+    sleep 0.01
+  done
+  echo -e "]${NC}"
+}
+
 #########################################################################
 source ./.env
 source ~/.bashrc
