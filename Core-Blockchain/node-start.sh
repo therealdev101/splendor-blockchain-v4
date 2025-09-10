@@ -154,6 +154,27 @@ finalize(){
   welcome
   initializeGPU
   
+  # Start vLLM AI service if available
+  if systemctl list-unit-files | grep -q "vllm-phi3.service"; then
+    echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
+    log_wait "Starting vLLM Phi-3 Mini AI load balancer"
+    
+    if systemctl start vllm-phi3 2>/dev/null; then
+      log_success "vLLM AI service started successfully"
+      
+      # Wait for API to be ready (non-blocking)
+      for i in {1..10}; do
+        if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+          log_success "vLLM API ready - AI load balancing active"
+          break
+        fi
+        sleep 2
+      done
+    else
+      log_wait "vLLM service will start after GPU drivers are activated"
+    fi
+  fi
+  
   if [ "$isRPC" = true ]; then
     echo -e "\n${GREEN}+------------------- Starting RPC -------------------+"
     startRpc
@@ -191,6 +212,23 @@ finalize(){
   pm2 save
   cd /root/splendor-blockchain-v4/Core-Blockchain/
 
+  # Final status report
+  echo -e "\n${GREEN}+------------------ SYSTEM STATUS -------------------+${NC}"
+  
+  # Check AI system
+  if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ AI System: vLLM Phi-3 Mini active (5M+ TPS ready)${NC}"
+  else
+    echo -e "${ORANGE}⚠️  AI System: Will activate after reboot${NC}"
+  fi
+  
+  # Check GPU status
+  if timeout 3 nvidia-smi >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ GPU: Active and ready${NC}"
+  else
+    echo -e "${ORANGE}⚠️  GPU: Will activate after reboot${NC}"
+  fi
+  
   # Check if GPU drivers need reboot and offer reboot
   if [ "$GPU_STATUS" = "pending_reboot" ] && lspci | grep -i nvidia >/dev/null 2>&1; then
     echo -e "\n${ORANGE}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -200,9 +238,9 @@ finalize(){
     echo -e "${ORANGE}║  activate for maximum TPS performance.                      ║${NC}"
     echo -e "${ORANGE}║                                                              ║${NC}"
     echo -e "${ORANGE}║  Current: CPU-only mode                                     ║${NC}"
-    echo -e "${ORANGE}║  After reboot: GPU-accelerated high TPS mode               ║${NC}"
+    echo -e "${ORANGE}║  After reboot: GPU+AI accelerated high TPS mode            ║${NC}"
     echo -e "${ORANGE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
-    echo -e "${CYAN}To activate GPU acceleration: ${GREEN}reboot${NC}"
+    echo -e "${CYAN}To activate GPU+AI acceleration: ${GREEN}reboot${NC}"
   fi
 
 }

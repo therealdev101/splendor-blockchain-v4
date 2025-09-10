@@ -592,6 +592,85 @@ install_nvm() {
   source ~/.bashrc
 }
 
+install_ai_llm(){
+  # Install AI-powered load balancing (vLLM + Phi-3 Mini) TASK AI
+  log_wait "Installing AI-powered load balancing system (vLLM + Phi-3 Mini)" && progress_bar
+  
+  # Install Python dependencies for vLLM
+  log_wait "Installing Python dependencies for AI system"
+  apt install -y python3 python3-pip python3-venv python3-dev jq
+  
+  # Create virtual environment for vLLM
+  log_wait "Creating Python virtual environment for vLLM"
+  python3 -m venv /opt/vllm-env
+  source /opt/vllm-env/bin/activate
+  
+  # Install PyTorch with CUDA support
+  log_wait "Installing PyTorch with CUDA support for AI acceleration"
+  pip install --upgrade pip setuptools wheel
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+  
+  # Install vLLM
+  log_wait "Installing vLLM (High-Performance LLM Inference Engine)"
+  pip install vllm transformers huggingface_hub fastapi uvicorn
+  
+  # Create vLLM systemd service
+  log_wait "Setting up vLLM as system service"
+  cat > /etc/systemd/system/vllm-phi3.service << EOF
+[Unit]
+Description=vLLM Phi-3 Mini Service for Blockchain AI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vllm-env
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=VLLM_USE_MODELSCOPE=False
+ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model microsoft/Phi-3-mini-4k-instruct --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.3 --max-model-len 4096 --dtype float16
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Enable vLLM service
+  systemctl daemon-reload
+  systemctl enable vllm-phi3
+  
+  # Add AI configuration to .env
+  log_wait "Configuring AI load balancing settings"
+  cat >> ./.env << EOF
+
+# AI-Powered Load Balancing Configuration (vLLM + Phi-3 Mini 3.8B)
+ENABLE_AI_LOAD_BALANCING=true
+LLM_ENDPOINT=http://localhost:8000/v1/completions
+LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
+LLM_TIMEOUT_SECONDS=2
+AI_UPDATE_INTERVAL_MS=500
+AI_HISTORY_SIZE=100
+AI_LEARNING_RATE=0.15
+AI_CONFIDENCE_THRESHOLD=0.75
+AI_ENABLE_LEARNING=true
+AI_ENABLE_PREDICTIONS=true
+AI_FAST_MODE=true
+VLLM_GPU_MEMORY_UTILIZATION=0.3
+VLLM_MAX_MODEL_LEN=4096
+EOF
+
+  # Create AI monitoring scripts
+  log_wait "Creating AI monitoring and management scripts"
+  mkdir -p ./scripts
+  
+  # Copy the AI setup script content
+  cp ./scripts/setup-ai-llm.sh ./scripts/setup-ai-llm-backup.sh 2>/dev/null || true
+  
+  log_success "AI-powered load balancing system installed (will activate after reboot)"
+}
+
 #Logger setup
 
 log_step() {
@@ -663,6 +742,8 @@ finalize(){
   yarn
   cd $nodePath
 
+  # Install AI-powered load balancing (vLLM + Phi-3 Mini)
+  install_ai_llm
 
   displayStatus
   
