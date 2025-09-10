@@ -157,10 +157,23 @@ install_gpu_dependencies(){
   cd ./tmp
   
   if [ ! -f "cuda_11.8.0_520.61.05_linux.run" ]; then
-    wget -q https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
+    log_wait "Downloading CUDA Toolkit (this may take several minutes)..."
+    wget --progress=bar:force https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
+    log_success "CUDA Toolkit download completed"
+  else
+    log_success "CUDA Toolkit installer already exists"
   fi
+  
+  log_wait "Installing CUDA Toolkit (this may take 5-10 minutes)..."
   chmod +x cuda_11.8.0_520.61.05_linux.run
-  sh cuda_11.8.0_520.61.05_linux.run --silent --toolkit --no-opengl-libs
+  
+  # Run with verbose output instead of silent
+  if sh cuda_11.8.0_520.61.05_linux.run --toolkit --no-opengl-libs --override --verbose 2>&1 | tee cuda_install.log; then
+    log_success "CUDA Toolkit installation completed"
+  else
+    log_error "CUDA Toolkit installation failed - check cuda_install.log for details"
+    tail -20 cuda_install.log
+  fi
   
   # Return to parent directory
   cd ../
