@@ -151,12 +151,19 @@ install_gpu_dependencies(){
   
   # Install CUDA Toolkit
   log_wait "Installing CUDA Toolkit 11.8"
+  
+  # Ensure tmp directory exists
+  mkdir -p ./tmp
   cd ./tmp
+  
   if [ ! -f "cuda_11.8.0_520.61.05_linux.run" ]; then
     wget -q https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
   fi
   chmod +x cuda_11.8.0_520.61.05_linux.run
   sh cuda_11.8.0_520.61.05_linux.run --silent --toolkit --no-opengl-libs
+  
+  # Return to parent directory
+  cd ../
   
   # Install OpenCL support
   log_wait "Installing OpenCL support"
@@ -175,7 +182,6 @@ install_gpu_dependencies(){
   echo 'export PATH=$PATH:$CUDA_PATH/bin' >> /etc/profile
   echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64' >> /etc/profile
   
-  cd ../
   log_success "GPU dependencies installed successfully"
 }
 
