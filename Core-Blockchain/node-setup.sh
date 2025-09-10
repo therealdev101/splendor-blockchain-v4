@@ -141,7 +141,6 @@ task6(){
 task6_gpu(){
   # Build GPU acceleration components TASK 6 GPU
   log_wait "Building GPU acceleration components" && progress_bar
-  cd node_src
   
   # Check if GPU dependencies are available
   if make -f Makefile.gpu check-deps 2>/dev/null; then
