@@ -52,53 +52,55 @@ welcome(){
 }
 
 countNodes(){
-  local i=1
-  totalNodes=$(ls -l ./chaindata/ | grep -c ^d)
-  while [[ $i -le $totalNodes ]]; do
-    
-    if [ -f "./chaindata/node$i/.rpc" ]; then  
-      ((totalRpc += 1))
-    else  
-        if [ -f "./chaindata/node$i/.validator" ]; then
+  totalRpc=0
+  totalValidator=0
+  totalNodes=0
+  
+  # Count actual node directories that exist
+  for dir in ./chaindata/node*; do
+    if [ -d "$dir" ]; then
+      ((totalNodes += 1))
+      if [ -f "$dir/.rpc" ]; then  
+        ((totalRpc += 1))
+      elif [ -f "$dir/.validator" ]; then
         ((totalValidator += 1))
-        fi
-    fi  
-    
-    ((i += 1))
-  done 
+      fi
+    fi
+  done
 }
 
 startRpc(){
-  i=$((totalValidator + 1))
-  while [[ $i -le $totalNodes ]]; do
-    
-
-    if tmux has-session -t node$i > /dev/null 2>&1; then
-        :
-    else
-        tmux new-session -d -s node$i
-        tmux send-keys -t node$i "./node_src/build/bin/geth --datadir ./chaindata/node$i --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=16384 --cache.database=8192 --cache.trie=4096 --cache.gc=4096 --txpool.accountslots=10000 --txpool.globalslots=2000000 --txpool.accountqueue=10000 --txpool.globalqueue=2000000 --ipcpath './chaindata/node$i/geth.ipc' console" Enter
-       
+  # Start only RPC nodes
+  for dir in ./chaindata/node*; do
+    if [ -d "$dir" ] && [ -f "$dir/.rpc" ]; then
+      node_num=$(basename "$dir" | sed 's/node//')
+      
+      if tmux has-session -t node$node_num > /dev/null 2>&1; then
+        echo -e "${ORANGE}RPC node$node_num session already exists${NC}"
+      else
+        echo -e "${GREEN}Starting RPC node$node_num${NC}"
+        tmux new-session -d -s node$node_num
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=16384 --cache.database=8192 --cache.trie=4096 --cache.gc=4096 --txpool.accountslots=10000 --txpool.globalslots=2000000 --txpool.accountqueue=10000 --txpool.globalqueue=2000000 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
+      fi
     fi
-
-
-    ((i += 1))
-  done 
+  done
 }
 
 startValidator(){
-  i=1
-  while [[ $i -le $totalValidator ]]; do
-    
-    if tmux has-session -t node$i > /dev/null 2>&1; then
-        :
-    else
-        tmux new-session -d -s node$i
-        tmux send-keys -t node$i "./node_src/build/bin/geth --datadir ./chaindata/node$i --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$i/pass.txt --syncmode=snap --gcmode=full --cache=16384 --cache.database=8192 --cache.trie=4096 --cache.gc=4096 --txpool.accountslots=10000 --txpool.globalslots=2000000 --txpool.accountqueue=10000 --txpool.globalqueue=2000000 --rpc.txfeecap=0 --http --http.addr 0.0.0.0 --http.api eth,net,web3,txpool,miner,debug --ws --ws.addr 0.0.0.0 --nat any --verbosity=3 console" Enter
+  # Start only Validator nodes
+  for dir in ./chaindata/node*; do
+    if [ -d "$dir" ] && [ -f "$dir/.validator" ]; then
+      node_num=$(basename "$dir" | sed 's/node//')
+      
+      if tmux has-session -t node$node_num > /dev/null 2>&1; then
+        echo -e "${ORANGE}Validator node$node_num session already exists${NC}"
+      else
+        echo -e "${GREEN}Starting Validator node$node_num${NC}"
+        tmux new-session -d -s node$node_num
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=snap --gcmode=full --cache=16384 --cache.database=8192 --cache.trie=4096 --cache.gc=4096 --txpool.accountslots=10000 --txpool.globalslots=2000000 --txpool.accountqueue=10000 --txpool.globalqueue=2000000 --rpc.txfeecap=0 --http --http.addr 0.0.0.0 --http.api eth,net,web3,txpool,miner,debug --ws --ws.addr 0.0.0.0 --nat any --verbosity=3 console" Enter
+      fi
     fi
-
-    ((i += 1))
-  done 
+  done
 }
 
 initializeGPU(){
