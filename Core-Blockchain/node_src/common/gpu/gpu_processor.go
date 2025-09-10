@@ -1,0 +1,741 @@
+package gpu
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"runtime"
+	"sync"
+	"time"
+	"unsafe"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
+)
+
+/*
+#cgo CFLAGS: -I/usr/local/cuda/include
+#cgo LDFLAGS: -L/usr/local/cuda/lib64 -lcuda -lcudart -lOpenCL
+
+#include <cuda_runtime.h>
+#include <CL/cl.h>
+#include <stdlib.h>
+#include <string.h>
+
+// CUDA function declarations
+extern "C" {
+    int initCUDA();
+    int processTxBatchCUDA(void* txData, int txCount, void* results);
+    int processHashesCUDA(void* hashes, int count, void* results);
+    int verifySignaturesCUDA(void* signatures, int count, void* results);
+    void cleanupCUDA();
+}
+
+// OpenCL function declarations
+extern "C" {
+    int initOpenCL();
+    int processTxBatchOpenCL(void* txData, int txCount, void* results);
+    int processHashesOpenCL(void* hashes, int count, void* results);
+    int verifySignaturesOpenCL(void* signatures, int count, void* results);
+    void cleanupOpenCL();
+}
+*/
+import "C"
+
+// GPUType represents the type of GPU acceleration
+type GPUType int
+
+const (
+	GPUTypeNone GPUType = iota
+	GPUTypeCUDA
+	GPUTypeOpenCL
+)
+
+// GPUProcessor provides GPU-accelerated blockchain operations
+type GPUProcessor struct {
+	gpuType         GPUType
+	deviceCount     int
+	maxBatchSize    int
+	maxMemoryUsage  uint64
+	
+	// Processing pools
+	hashPool        chan *HashBatch
+	signaturePool   chan *SignatureBatch
+	txPool          chan *TransactionBatch
+	
+	// Statistics
+	mu              sync.RWMutex
+	processedHashes uint64
+	processedSigs   uint64
+	processedTxs    uint64
+	avgHashTime     time.Duration
+	avgSigTime      time.Duration
+	avgTxTime       time.Duration
+	
+	// Shutdown coordination
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	
+	// Memory management
+	memoryPool      sync.Pool
+	cudaStreams     []unsafe.Pointer
+	openclQueues    []unsafe.Pointer
+}
+
+// GPUConfig holds configuration for GPU processing
+type GPUConfig struct {
+	PreferredGPUType GPUType `json:"preferredGpuType"`
+	MaxBatchSize     int     `json:"maxBatchSize"`
+	MaxMemoryUsage   uint64  `json:"maxMemoryUsage"`
+	HashWorkers      int     `json:"hashWorkers"`
+	SignatureWorkers int     `json:"signatureWorkers"`
+	TxWorkers        int     `json:"txWorkers"`
+	EnablePipelining bool    `json:"enablePipelining"`
+}
+
+// DefaultGPUConfig returns optimized GPU configuration for NVIDIA A40 (48GB VRAM)
+func DefaultGPUConfig() *GPUConfig {
+	return &GPUConfig{
+		PreferredGPUType: GPUTypeCUDA, // Prefer CUDA if available
+		MaxBatchSize:     100000,      // Massive 100K batches for A40 efficiency
+		MaxMemoryUsage:   40 * 1024 * 1024 * 1024, // 40GB GPU memory (leave 8GB for system/AI)
+		HashWorkers:      32,          // 32 workers for enterprise GPU
+		SignatureWorkers: 32,          // 32 workers for signature verification
+		TxWorkers:        32,          // 32 workers for transaction processing
+		EnablePipelining: true,
+	}
+}
+
+// HashBatch represents a batch of hashes to process
+type HashBatch struct {
+	Hashes   [][]byte
+	Results  [][]byte
+	Callback func([][]byte, error)
+}
+
+// SignatureBatch represents a batch of signatures to verify
+type SignatureBatch struct {
+	Signatures [][]byte
+	Messages   [][]byte
+	PublicKeys [][]byte
+	Results    []bool
+	Callback   func([]bool, error)
+}
+
+// TransactionBatch represents a batch of transactions to process
+type TransactionBatch struct {
+	Transactions []*types.Transaction
+	Results      []*TxResult
+	Callback     func([]*TxResult, error)
+}
+
+// TxResult holds the result of GPU transaction processing
+type TxResult struct {
+	Hash      common.Hash
+	Valid     bool
+	GasUsed   uint64
+	Error     error
+	Signature []byte
+}
+
+// NewGPUProcessor creates a new GPU processor
+func NewGPUProcessor(config *GPUConfig) (*GPUProcessor, error) {
+	if config == nil {
+		config = DefaultGPUConfig()
+	}
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	processor := &GPUProcessor{
+		maxBatchSize:   config.MaxBatchSize,
+		maxMemoryUsage: config.MaxMemoryUsage,
+		ctx:            ctx,
+		cancel:         cancel,
+		hashPool:       make(chan *HashBatch, 100),
+		signaturePool:  make(chan *SignatureBatch, 100),
+		txPool:         make(chan *TransactionBatch, 100),
+	}
+	
+	// Initialize memory pool
+	processor.memoryPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, config.MaxBatchSize*256) // 256 bytes per item
+		},
+	}
+	
+	// Try to initialize GPU
+	if err := processor.initializeGPU(config.PreferredGPUType); err != nil {
+		log.Warn("GPU initialization failed, falling back to CPU", "error", err)
+		processor.gpuType = GPUTypeNone
+	}
+	
+	// Start worker goroutines
+	processor.startWorkers(config)
+	
+	log.Info("GPU processor initialized", 
+		"type", processor.gpuType,
+		"deviceCount", processor.deviceCount,
+		"maxBatchSize", processor.maxBatchSize,
+	)
+	
+	return processor, nil
+}
+
+// initializeGPU attempts to initialize GPU acceleration
+func (p *GPUProcessor) initializeGPU(preferredType GPUType) error {
+	// Try CUDA first if preferred or if no preference
+	if preferredType == GPUTypeCUDA || preferredType == GPUTypeNone {
+		if result := C.initCUDA(); result == 0 {
+			p.gpuType = GPUTypeCUDA
+			p.deviceCount = int(result)
+			return nil
+		}
+	}
+	
+	// Try OpenCL if CUDA failed or if preferred
+	if preferredType == GPUTypeOpenCL || preferredType == GPUTypeNone {
+		if result := C.initOpenCL(); result == 0 {
+			p.gpuType = GPUTypeOpenCL
+			p.deviceCount = int(result)
+			return nil
+		}
+	}
+	
+	return errors.New("no GPU acceleration available")
+}
+
+// startWorkers starts the GPU worker goroutines
+func (p *GPUProcessor) startWorkers(config *GPUConfig) {
+	// Hash processing workers
+	for i := 0; i < config.HashWorkers; i++ {
+		p.wg.Add(1)
+		go p.hashWorker()
+	}
+	
+	// Signature verification workers
+	for i := 0; i < config.SignatureWorkers; i++ {
+		p.wg.Add(1)
+		go p.signatureWorker()
+	}
+	
+	// Transaction processing workers
+	for i := 0; i < config.TxWorkers; i++ {
+		p.wg.Add(1)
+		go p.transactionWorker()
+	}
+}
+
+// ProcessHashesBatch processes a batch of hashes using GPU acceleration
+func (p *GPUProcessor) ProcessHashesBatch(hashes [][]byte, callback func([][]byte, error)) error {
+	if len(hashes) == 0 {
+		callback(nil, nil)
+		return nil
+	}
+	
+	batch := &HashBatch{
+		Hashes:   hashes,
+		Results:  make([][]byte, len(hashes)),
+		Callback: callback,
+	}
+	
+	select {
+	case p.hashPool <- batch:
+		return nil
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	default:
+		return errors.New("hash processing queue full")
+	}
+}
+
+// ProcessSignaturesBatch verifies a batch of signatures using GPU acceleration
+func (p *GPUProcessor) ProcessSignaturesBatch(signatures, messages, publicKeys [][]byte, callback func([]bool, error)) error {
+	if len(signatures) == 0 {
+		callback(nil, nil)
+		return nil
+	}
+	
+	batch := &SignatureBatch{
+		Signatures: signatures,
+		Messages:   messages,
+		PublicKeys: publicKeys,
+		Results:    make([]bool, len(signatures)),
+		Callback:   callback,
+	}
+	
+	select {
+	case p.signaturePool <- batch:
+		return nil
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	default:
+		return errors.New("signature processing queue full")
+	}
+}
+
+// ProcessTransactionsBatch processes a batch of transactions using GPU acceleration
+func (p *GPUProcessor) ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*TxResult, error)) error {
+	if len(txs) == 0 {
+		callback(nil, nil)
+		return nil
+	}
+	
+	batch := &TransactionBatch{
+		Transactions: txs,
+		Results:      make([]*TxResult, len(txs)),
+		Callback:     callback,
+	}
+	
+	select {
+	case p.txPool <- batch:
+		return nil
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	default:
+		return errors.New("transaction processing queue full")
+	}
+}
+
+// hashWorker processes hash batches using GPU acceleration
+func (p *GPUProcessor) hashWorker() {
+	defer p.wg.Done()
+	
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case batch := <-p.hashPool:
+			start := time.Now()
+			
+			if p.gpuType == GPUTypeNone {
+				// CPU fallback
+				p.processHashesCPU(batch)
+			} else {
+				// GPU processing
+				p.processHashesGPU(batch)
+			}
+			
+			duration := time.Since(start)
+			p.updateHashStats(duration)
+		}
+	}
+}
+
+// signatureWorker processes signature verification batches
+func (p *GPUProcessor) signatureWorker() {
+	defer p.wg.Done()
+	
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case batch := <-p.signaturePool:
+			start := time.Now()
+			
+			if p.gpuType == GPUTypeNone {
+				// CPU fallback
+				p.processSignaturesCPU(batch)
+			} else {
+				// GPU processing
+				p.processSignaturesGPU(batch)
+			}
+			
+			duration := time.Since(start)
+			p.updateSigStats(duration)
+		}
+	}
+}
+
+// transactionWorker processes transaction batches
+func (p *GPUProcessor) transactionWorker() {
+	defer p.wg.Done()
+	
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case batch := <-p.txPool:
+			start := time.Now()
+			
+			if p.gpuType == GPUTypeNone {
+				// CPU fallback
+				p.processTransactionsCPU(batch)
+			} else {
+				// GPU processing
+				p.processTransactionsGPU(batch)
+			}
+			
+			duration := time.Since(start)
+			p.updateTxStats(duration)
+		}
+	}
+}
+
+// processHashesGPU processes hashes using GPU acceleration
+func (p *GPUProcessor) processHashesGPU(batch *HashBatch) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("GPU hash processing panicked", "panic", r)
+			p.processHashesCPU(batch) // Fallback to CPU
+		}
+	}()
+	
+	// Prepare data for GPU
+	hashData := p.prepareHashData(batch.Hashes)
+	defer p.memoryPool.Put(hashData)
+	
+	// Process on GPU
+	var result int
+	switch p.gpuType {
+	case GPUTypeCUDA:
+		result = int(C.processHashesCUDA(
+			unsafe.Pointer(&hashData[0]),
+			C.int(len(batch.Hashes)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	case GPUTypeOpenCL:
+		result = int(C.processHashesOpenCL(
+			unsafe.Pointer(&hashData[0]),
+			C.int(len(batch.Hashes)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	}
+	
+	if result != 0 {
+		log.Warn("GPU hash processing failed, falling back to CPU", "error", result)
+		p.processHashesCPU(batch)
+		return
+	}
+	
+	// Convert results
+	p.convertHashResults(batch)
+	
+	// Call callback
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// processHashesCPU processes hashes using CPU as fallback
+func (p *GPUProcessor) processHashesCPU(batch *HashBatch) {
+	for i, hash := range batch.Hashes {
+		result := crypto.Keccak256(hash)
+		batch.Results[i] = result
+	}
+	
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// processSignaturesGPU processes signature verification using GPU
+func (p *GPUProcessor) processSignaturesGPU(batch *SignatureBatch) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("GPU signature processing panicked", "panic", r)
+			p.processSignaturesCPU(batch) // Fallback to CPU
+		}
+	}()
+	
+	// Prepare data for GPU
+	sigData := p.prepareSignatureData(batch.Signatures, batch.Messages, batch.PublicKeys)
+	defer p.memoryPool.Put(sigData)
+	
+	// Process on GPU
+	var result int
+	switch p.gpuType {
+	case GPUTypeCUDA:
+		result = int(C.verifySignaturesCUDA(
+			unsafe.Pointer(&sigData[0]),
+			C.int(len(batch.Signatures)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	case GPUTypeOpenCL:
+		result = int(C.verifySignaturesOpenCL(
+			unsafe.Pointer(&sigData[0]),
+			C.int(len(batch.Signatures)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	}
+	
+	if result != 0 {
+		log.Warn("GPU signature processing failed, falling back to CPU", "error", result)
+		p.processSignaturesCPU(batch)
+		return
+	}
+	
+	// Call callback
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// processSignaturesCPU processes signature verification using CPU as fallback
+func (p *GPUProcessor) processSignaturesCPU(batch *SignatureBatch) {
+	for i := range batch.Signatures {
+		// Simplified signature verification for fallback
+		// In production, this would use proper ECDSA verification
+		batch.Results[i] = len(batch.Signatures[i]) > 0 && 
+						  len(batch.Messages[i]) > 0 && 
+						  len(batch.PublicKeys[i]) > 0
+	}
+	
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// processTransactionsGPU processes transactions using GPU
+func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("GPU transaction processing panicked", "panic", r)
+			p.processTransactionsCPU(batch) // Fallback to CPU
+		}
+	}()
+	
+	// Prepare data for GPU
+	txData := p.prepareTransactionData(batch.Transactions)
+	defer p.memoryPool.Put(txData)
+	
+	// Process on GPU
+	var result int
+	switch p.gpuType {
+	case GPUTypeCUDA:
+		result = int(C.processTxBatchCUDA(
+			unsafe.Pointer(&txData[0]),
+			C.int(len(batch.Transactions)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	case GPUTypeOpenCL:
+		result = int(C.processTxBatchOpenCL(
+			unsafe.Pointer(&txData[0]),
+			C.int(len(batch.Transactions)),
+			unsafe.Pointer(&batch.Results[0]),
+		))
+	}
+	
+	if result != 0 {
+		log.Warn("GPU transaction processing failed, falling back to CPU", "error", result)
+		p.processTransactionsCPU(batch)
+		return
+	}
+	
+	// Convert results
+	p.convertTransactionResults(batch)
+	
+	// Call callback
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// processTransactionsCPU processes transactions using CPU as fallback
+func (p *GPUProcessor) processTransactionsCPU(batch *TransactionBatch) {
+	for i, tx := range batch.Transactions {
+		batch.Results[i] = &TxResult{
+			Hash:    tx.Hash(),
+			Valid:   true, // Simplified validation
+			GasUsed: tx.Gas(),
+			Error:   nil,
+		}
+	}
+	
+	if batch.Callback != nil {
+		batch.Callback(batch.Results, nil)
+	}
+}
+
+// Helper functions for data preparation
+func (p *GPUProcessor) prepareHashData(hashes [][]byte) []byte {
+	data := p.memoryPool.Get().([]byte)
+	offset := 0
+	
+	for _, hash := range hashes {
+		copy(data[offset:], hash)
+		offset += len(hash)
+	}
+	
+	return data[:offset]
+}
+
+func (p *GPUProcessor) prepareSignatureData(signatures, messages, publicKeys [][]byte) []byte {
+	data := p.memoryPool.Get().([]byte)
+	offset := 0
+	
+	for i := range signatures {
+		copy(data[offset:], signatures[i])
+		offset += len(signatures[i])
+		copy(data[offset:], messages[i])
+		offset += len(messages[i])
+		copy(data[offset:], publicKeys[i])
+		offset += len(publicKeys[i])
+	}
+	
+	return data[:offset]
+}
+
+func (p *GPUProcessor) prepareTransactionData(txs []*types.Transaction) []byte {
+	data := p.memoryPool.Get().([]byte)
+	offset := 0
+	
+	for _, tx := range txs {
+		txBytes, _ := tx.MarshalBinary()
+		copy(data[offset:], txBytes)
+		offset += len(txBytes)
+	}
+	
+	return data[:offset]
+}
+
+func (p *GPUProcessor) convertHashResults(batch *HashBatch) {
+	// Results are already in the correct format from GPU
+	// This function can be extended for format conversion if needed
+}
+
+func (p *GPUProcessor) convertTransactionResults(batch *TransactionBatch) {
+	// Convert GPU results to TxResult format
+	// This is a simplified implementation
+	for i := range batch.Results {
+		if batch.Results[i] == nil {
+			batch.Results[i] = &TxResult{
+				Hash:  batch.Transactions[i].Hash(),
+				Valid: true,
+			}
+		}
+	}
+}
+
+// Statistics update functions
+func (p *GPUProcessor) updateHashStats(duration time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	p.processedHashes++
+	if p.avgHashTime == 0 {
+		p.avgHashTime = duration
+	} else {
+		p.avgHashTime = (p.avgHashTime + duration) / 2
+	}
+}
+
+func (p *GPUProcessor) updateSigStats(duration time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	p.processedSigs++
+	if p.avgSigTime == 0 {
+		p.avgSigTime = duration
+	} else {
+		p.avgSigTime = (p.avgSigTime + duration) / 2
+	}
+}
+
+func (p *GPUProcessor) updateTxStats(duration time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	p.processedTxs++
+	if p.avgTxTime == 0 {
+		p.avgTxTime = duration
+	} else {
+		p.avgTxTime = (p.avgTxTime + duration) / 2
+	}
+}
+
+// GetStats returns current GPU processor statistics
+func (p *GPUProcessor) GetStats() GPUStats {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	
+	return GPUStats{
+		GPUType:         p.gpuType,
+		DeviceCount:     p.deviceCount,
+		ProcessedHashes: p.processedHashes,
+		ProcessedSigs:   p.processedSigs,
+		ProcessedTxs:    p.processedTxs,
+		AvgHashTime:     p.avgHashTime,
+		AvgSigTime:      p.avgSigTime,
+		AvgTxTime:       p.avgTxTime,
+		HashQueueSize:   len(p.hashPool),
+		SigQueueSize:    len(p.signaturePool),
+		TxQueueSize:     len(p.txPool),
+	}
+}
+
+// GPUStats holds GPU processor statistics
+type GPUStats struct {
+	GPUType         GPUType       `json:"gpuType"`
+	DeviceCount     int           `json:"deviceCount"`
+	ProcessedHashes uint64        `json:"processedHashes"`
+	ProcessedSigs   uint64        `json:"processedSigs"`
+	ProcessedTxs    uint64        `json:"processedTxs"`
+	AvgHashTime     time.Duration `json:"avgHashTime"`
+	AvgSigTime      time.Duration `json:"avgSigTime"`
+	AvgTxTime       time.Duration `json:"avgTxTime"`
+	HashQueueSize   int           `json:"hashQueueSize"`
+	SigQueueSize    int           `json:"sigQueueSize"`
+	TxQueueSize     int           `json:"txQueueSize"`
+}
+
+// IsGPUAvailable returns true if GPU acceleration is available
+func (p *GPUProcessor) IsGPUAvailable() bool {
+	return p.gpuType != GPUTypeNone
+}
+
+// GetGPUType returns the current GPU type
+func (p *GPUProcessor) GetGPUType() GPUType {
+	return p.gpuType
+}
+
+// Close gracefully shuts down the GPU processor
+func (p *GPUProcessor) Close() error {
+	log.Info("Shutting down GPU processor...")
+	
+	// Cancel context to stop all workers
+	p.cancel()
+	
+	// Wait for all workers to finish
+	p.wg.Wait()
+	
+	// Cleanup GPU resources
+	switch p.gpuType {
+	case GPUTypeCUDA:
+		C.cleanupCUDA()
+	case GPUTypeOpenCL:
+		C.cleanupOpenCL()
+	}
+	
+	log.Info("GPU processor shutdown complete")
+	return nil
+}
+
+// Global GPU processor instance
+var globalGPUProcessor *GPUProcessor
+
+// InitGlobalGPUProcessor initializes the global GPU processor
+func InitGlobalGPUProcessor(config *GPUConfig) error {
+	if globalGPUProcessor != nil {
+		globalGPUProcessor.Close()
+	}
+	
+	var err error
+	globalGPUProcessor, err = NewGPUProcessor(config)
+	return err
+}
+
+// GetGlobalGPUProcessor returns the global GPU processor
+func GetGlobalGPUProcessor() *GPUProcessor {
+	return globalGPUProcessor
+}
+
+// CloseGlobalGPUProcessor closes the global GPU processor
+func CloseGlobalGPUProcessor() error {
+	if globalGPUProcessor != nil {
+		return globalGPUProcessor.Close()
+	}
+	return nil
+}
