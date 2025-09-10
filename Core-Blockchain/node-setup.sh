@@ -287,13 +287,20 @@ task6_gpu(){
   
   cd node_src
   
-  # Set environment for build
+  # Set environment for build and source CUDA paths
   export CUDA_PATH=/usr/local/cuda
-  export PATH=$PATH:$CUDA_PATH/bin
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64
+  export PATH=$CUDA_PATH/bin:$PATH
+  export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+  
+  # Verify CUDA installation
+  if [ -f "/usr/local/cuda/bin/nvcc" ]; then
+    log_success "CUDA compiler found at /usr/local/cuda/bin/nvcc"
+  else
+    log_wait "CUDA compiler not found - will be available after reboot"
+  fi
   
   # Build GPU components
-  if make -f Makefile.gpu check-deps 2>/dev/null; then
+  if command -v nvcc >/dev/null 2>&1 && make -f Makefile.gpu check-deps 2>/dev/null; then
     make -f Makefile.gpu all
     log_success "GPU acceleration components built successfully - Ready for 1M+ TPS"
   else
@@ -310,11 +317,21 @@ task7(){
   # setting up directories and structure for node/s TASK 7
   log_wait "Setting up directories for node instances" && progress_bar
 
-  cd ../
+  # Ensure we're in the correct directory (Core-Blockchain)
+  cd $BASE_DIR/Core-Blockchain
+  
+  # Verify chaindata directory exists
+  if [ ! -d "chaindata" ]; then
+    log_error "chaindata directory not found in $(pwd)"
+    log_error "Current directory contents:"
+    ls -la
+    return 1
+  fi
 
   i=1
   while [[ $i -le $totalNodes ]]; do
-    mkdir ./chaindata/node$i
+    mkdir -p ./chaindata/node$i
+    log_success "Created node directory: ./chaindata/node$i"
     ((i += 1))
   done
 
