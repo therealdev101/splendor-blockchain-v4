@@ -400,6 +400,38 @@ displayStatus(){
   echo -e "${ORANGE}➜ To start the node, run:${NC} ${GREEN}./node-start.sh${NC}\n"
 }
 
+reboot_countdown(){
+  # Check if GPU drivers were installed and reboot is needed
+  if lspci | grep -i nvidia >/dev/null 2>&1 && ! nvidia-smi >/dev/null 2>&1; then
+    echo -e "\n${ORANGE}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${ORANGE}║                    REBOOT REQUIRED                          ║${NC}"
+    echo -e "${ORANGE}║                                                              ║${NC}"
+    echo -e "${ORANGE}║  NVIDIA GPU drivers have been installed and require a       ║${NC}"
+    echo -e "${ORANGE}║  system reboot to activate GPU acceleration features.       ║${NC}"
+    echo -e "${ORANGE}║                                                              ║${NC}"
+    echo -e "${ORANGE}║  After reboot, the node will automatically start via        ║${NC}"
+    echo -e "${ORANGE}║  the configured autostart in /etc/profile                   ║${NC}"
+    echo -e "${ORANGE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    
+    echo -e "${RED}⚠️  AUTOMATIC REBOOT IN:${NC}"
+    for i in {30..1}; do
+      echo -ne "${CYAN}\r🔄 Rebooting in $i seconds... (Press Ctrl+C to cancel)${NC}"
+      sleep 1
+    done
+    
+    echo -e "\n\n${GREEN}🔄 Rebooting now to activate GPU drivers...${NC}"
+    echo -e "${ORANGE}The system will automatically start the RPC node after reboot.${NC}\n"
+    
+    # Sync filesystem before reboot
+    sync
+    
+    # Reboot the system
+    reboot
+  else
+    echo -e "\n${GREEN}✅ No reboot required - GPU drivers already active or no GPU detected${NC}"
+  fi
+}
+
 
 displayWelcome(){
   # display welcome message
@@ -587,6 +619,9 @@ finalize(){
 
 
   displayStatus
+  
+  # Check if reboot is needed and handle automatic reboot
+  reboot_countdown
 }
 
 
