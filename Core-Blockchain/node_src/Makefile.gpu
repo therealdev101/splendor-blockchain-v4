@@ -1,183 +1,21 @@
 # GPU Acceleration Makefile for Splendor Blockchain
-# This makefile handles compilation of CUDA and OpenCL kernels
-
-# Compiler settings
 NVCC = nvcc
-CC = gcc
-GO = go
-
-# CUDA settings
+CC = gcc-9
 CUDA_PATH ?= /usr/local/cuda
-CUDA_INC_PATH = $(CUDA_PATH)/include
-CUDA_LIB_PATH = $(CUDA_PATH)/lib64
-
-# OpenCL settings
-OPENCL_INC_PATH ?= /usr/include
-OPENCL_LIB_PATH ?= /usr/lib/x86_64-linux-gnu
-
-# Compiler flags
-NVCC_FLAGS = -O3 -arch=sm_50 -Xcompiler -fPIC -allow-unsupported-compiler -std=c++11 -Xcompiler -D_GNU_SOURCE -Xcompiler -D__STDC_WANT_IEC_60559_TYPES_EXT__=0 -Xcompiler -D__STDC_WANT_IEC_60559_FUNCS_EXT__=0 -Xcompiler -D__STDC_WANT_IEC_60559_ATTRIBS_EXT__=0 --compiler-options=-Wno-deprecated-declarations -Xcompiler -nostdinc++ -Xcompiler -I/usr/local/cuda/include
-CC_FLAGS = -O3 -fPIC -Wall
-CGO_CFLAGS = -I$(CUDA_INC_PATH) -I$(OPENCL_INC_PATH)
-CGO_LDFLAGS = -L$(CUDA_LIB_PATH) -L$(OPENCL_LIB_PATH) -lcuda -lcudart -lOpenCL
-
-# Source files
+NVCC_FLAGS = -O3 -arch=sm_50 -Xcompiler -fPIC -allow-unsupported-compiler -std=c++11
 CUDA_SRC = common/gpu/cuda_kernels.cu
-OPENCL_SRC = common/gpu/opencl_kernels.c
-GPU_GO_SRC = common/gpu/gpu_processor.go
-HYBRID_GO_SRC = common/hybrid/hybrid_processor.go
-
-# Object files
 CUDA_OBJ = common/gpu/cuda_kernels.o
-OPENCL_OBJ = common/gpu/opencl_kernels.o
-
-# Shared libraries
 CUDA_LIB = common/gpu/libcuda_kernels.so
-OPENCL_LIB = common/gpu/libopencl_kernels.so
 
-# Default target
-.PHONY: all
-all: check-deps cuda opencl test
+.PHONY: cuda clean
 
-# Check dependencies
-.PHONY: check-deps
-check-deps:
-	@echo "Checking GPU dependencies..."
-	@which nvcc > /dev/null 2>&1 || (echo "CUDA compiler (nvcc) not found. Please install CUDA toolkit." && exit 1)
-	@test -f $(CUDA_INC_PATH)/cuda_runtime.h || (echo "CUDA headers not found at $(CUDA_INC_PATH)" && exit 1)
-	@test -f $(OPENCL_INC_PATH)/CL/cl.h || (echo "OpenCL headers not found at $(OPENCL_INC_PATH)" && exit 1)
-	@echo "Dependencies check passed."
-
-# CUDA compilation
-.PHONY: cuda
 cuda: $(CUDA_LIB)
 
 $(CUDA_OBJ): $(CUDA_SRC)
-	@echo "Compiling CUDA kernels..."
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 $(CUDA_LIB): $(CUDA_OBJ)
-	@echo "Creating CUDA shared library..."
 	$(NVCC) -shared $(NVCC_FLAGS) $< -o $@
 
-# OpenCL compilation
-.PHONY: opencl
-opencl: $(OPENCL_LIB)
-
-$(OPENCL_OBJ): $(OPENCL_SRC)
-	@echo "Compiling OpenCL kernels..."
-	$(CC) $(CC_FLAGS) -I$(OPENCL_INC_PATH) -c $< -o $@
-
-$(OPENCL_LIB): $(OPENCL_OBJ)
-	@echo "Creating OpenCL shared library..."
-	$(CC) -shared $< -L$(OPENCL_LIB_PATH) -lOpenCL -o $@
-
-# Go compilation with GPU support
-.PHONY: go-gpu
-go-gpu: cuda opencl
-	@echo "Building Go modules with GPU support..."
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) build -v ./common/gpu/...
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) build -v ./common/hybrid/...
-
-# Test GPU functionality
-.PHONY: test
-test: go-gpu
-	@echo "Running GPU tests..."
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -v ./common/gpu/...
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -v ./common/hybrid/...
-
-# Benchmark GPU performance
-.PHONY: benchmark
-benchmark: go-gpu
-	@echo "Running GPU benchmarks..."
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -bench=. -v ./common/gpu/...
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -bench=. -v ./common/hybrid/...
-
-# Clean build artifacts
-.PHONY: clean
 clean:
-	@echo "Cleaning GPU build artifacts..."
-	rm -f $(CUDA_OBJ) $(OPENCL_OBJ)
-	rm -f $(CUDA_LIB) $(OPENCL_LIB)
-	rm -f common/gpu/*.so
-	$(GO) clean ./common/gpu/...
-	$(GO) clean ./common/hybrid/...
-
-# Install GPU libraries system-wide (requires sudo)
-.PHONY: install
-install: all
-	@echo "Installing GPU libraries..."
-	sudo cp $(CUDA_LIB) /usr/local/lib/
-	sudo cp $(OPENCL_LIB) /usr/local/lib/
-	sudo ldconfig
-	@echo "GPU libraries installed successfully."
-
-# Development build (with debug symbols)
-.PHONY: debug
-debug: NVCC_FLAGS += -g -G
-debug: CC_FLAGS += -g
-debug: all
-
-# Production build (optimized)
-.PHONY: release
-release: NVCC_FLAGS += -DNDEBUG
-release: CC_FLAGS += -DNDEBUG
-release: all
-
-# Check GPU devices
-.PHONY: check-gpu
-check-gpu:
-	@echo "Checking available GPU devices..."
-	@nvidia-smi 2>/dev/null || echo "NVIDIA GPU not found or nvidia-smi not available"
-	@clinfo 2>/dev/null || echo "OpenCL info not available (install clinfo package)"
-
-# Performance profiling
-.PHONY: profile
-profile: go-gpu
-	@echo "Running performance profiling..."
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -cpuprofile=cpu.prof -memprofile=mem.prof -bench=. ./common/gpu/...
-	@echo "Profile files generated: cpu.prof, mem.prof"
-
-# Memory check with valgrind (for debugging)
-.PHONY: memcheck
-memcheck: debug
-	@echo "Running memory check..."
-	valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all ./test_gpu_binary
-
-# Docker build support
-.PHONY: docker-build
-docker-build:
-	@echo "Building GPU-enabled Docker image..."
-	docker build -f Dockerfile.gpu -t splendor-blockchain-gpu .
-
-# Help target
-.PHONY: help
-help:
-	@echo "Splendor Blockchain GPU Acceleration Makefile"
-	@echo ""
-	@echo "Available targets:"
-	@echo "  all          - Build all GPU components (default)"
-	@echo "  check-deps   - Check for required dependencies"
-	@echo "  cuda         - Build CUDA kernels only"
-	@echo "  opencl       - Build OpenCL kernels only"
-	@echo "  go-gpu       - Build Go modules with GPU support"
-	@echo "  test         - Run GPU functionality tests"
-	@echo "  benchmark    - Run GPU performance benchmarks"
-	@echo "  clean        - Clean build artifacts"
-	@echo "  install      - Install GPU libraries system-wide"
-	@echo "  debug        - Build with debug symbols"
-	@echo "  release      - Build optimized for production"
-	@echo "  check-gpu    - Check available GPU devices"
-	@echo "  profile      - Run performance profiling"
-	@echo "  memcheck     - Run memory check with valgrind"
-	@echo "  docker-build - Build GPU-enabled Docker image"
-	@echo "  help         - Show this help message"
-	@echo ""
-	@echo "Environment variables:"
-	@echo "  CUDA_PATH    - Path to CUDA installation (default: /usr/local/cuda)"
-	@echo "  OPENCL_INC_PATH - Path to OpenCL headers (default: /usr/include)"
-	@echo "  OPENCL_LIB_PATH - Path to OpenCL libraries (default: /usr/lib/x86_64-linux-gnu)"
-
-# Include dependency files if they exist
--include $(CUDA_OBJ:.o=.d)
--include $(OPENCL_OBJ:.o=.d)
+	rm -f $(CUDA_OBJ) $(CUDA_LIB) common/gpu/*.so

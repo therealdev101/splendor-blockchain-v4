@@ -16,6 +16,17 @@ geth:
 all:
 	$(GORUN) build/ci.go install
 
+gpu:
+	@echo "Building GPU acceleration components..."
+	@if [ -f "Makefile.gpu" ]; then \
+		make -f Makefile.gpu cuda; \
+	else \
+		echo "Makefile.gpu not found - GPU acceleration not available"; \
+	fi
+
+all-gpu: all gpu
+	@echo "Complete build with GPU acceleration finished"
+
 android:
 	$(GORUN) build/ci.go aar --local
 	@echo "Done building."
