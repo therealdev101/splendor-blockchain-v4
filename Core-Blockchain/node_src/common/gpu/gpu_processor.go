@@ -3,8 +3,6 @@ package gpu
 import (
 	"context"
 	"errors"
-	"fmt"
-	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -16,8 +14,7 @@ import (
 )
 
 /*
-#cgo CFLAGS: -I/usr/local/cuda/include
-#cgo LDFLAGS: -L/usr/local/cuda/lib64 -lcuda -lcudart -lOpenCL
+#cgo LDFLAGS: -lOpenCL
 
 #include <stdlib.h>
 #include <string.h>
@@ -36,18 +33,12 @@ int processHashesOpenCL(void* hashes, int count, void* results);
 int verifySignaturesOpenCL(void* signatures, int count, void* results);
 void cleanupOpenCL();
 
-// Stub implementations for compilation
-int initCUDA() { return 0; }
-int processTxBatchCUDA(void* txData, int txCount, void* results) { return 0; }
-int processHashesCUDA(void* hashes, int count, void* results) { return 0; }
-int verifySignaturesCUDA(void* signatures, int count, void* results) { return 0; }
+// Stub implementations for CUDA (since CUDA is not available)
+int initCUDA() { return -1; }
+int processTxBatchCUDA(void* txData, int txCount, void* results) { return -1; }
+int processHashesCUDA(void* hashes, int count, void* results) { return -1; }
+int verifySignaturesCUDA(void* signatures, int count, void* results) { return -1; }
 void cleanupCUDA() {}
-
-int initOpenCL() { return 0; }
-int processTxBatchOpenCL(void* txData, int txCount, void* results) { return 0; }
-int processHashesOpenCL(void* hashes, int count, void* results) { return 0; }
-int verifySignaturesOpenCL(void* signatures, int count, void* results) { return 0; }
-void cleanupOpenCL() {}
 */
 import "C"
 

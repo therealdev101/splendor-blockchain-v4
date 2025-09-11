@@ -2,7 +2,6 @@ package hybrid
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"sync"
 	"time"
@@ -325,9 +324,7 @@ func (h *HybridProcessor) processGPUOnly(txs []*types.Transaction, callback func
 		return h.processCPUOnly(txs, callback, start)
 	}
 	
-	// Convert to GPU format and process
-	gpuResults := make([]*gpu.TxResult, len(txs))
-	
+	// Process transactions using GPU
 	err := h.gpuProcessor.ProcessTransactionsBatch(txs, func(results []*gpu.TxResult, err error) {
 		if err != nil {
 			callback(nil, err)

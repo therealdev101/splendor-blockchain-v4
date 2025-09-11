@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // OpenCL error checking macro
 #define CL_CHECK(call) \
@@ -193,8 +198,6 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
 )";
 
 // Host functions
-extern "C" {
-
 int initOpenCL() {
     if (opencl_initialized) {
         return device_count;
@@ -467,4 +470,6 @@ void cleanupOpenCL() {
     printf("OpenCL cleanup completed\n");
 }
 
-} // extern "C"
+#ifdef __cplusplus
+}
+#endif
