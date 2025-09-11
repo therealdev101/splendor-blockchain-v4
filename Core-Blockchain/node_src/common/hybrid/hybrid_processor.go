@@ -528,46 +528,61 @@ func (h *HybridProcessor) performanceMonitor() {
 
 // collectPerformanceMetrics collects current performance metrics
 func (h *HybridProcessor) collectPerformanceMetrics() {
-	// Get CPU stats
-	cpuStats := h.cpuProcessor.GetStats()
-	
-	// Get GPU stats
-	var gpuStats gpu.GPUStats
-	if h.gpuProcessor != nil {
-		gpuStats = h.gpuProcessor.GetStats()
+	// Safety check for nil pointers
+	if h == nil || h.loadBalancer == nil {
+		return
 	}
 	
-	// Calculate utilization
-	cpuUtil := float64(cpuStats.TxPoolRunning) / float64(h.config.CPUConfig.TxWorkers)
-	gpuUtil := 0.0
-	if h.gpuProcessor != nil && h.gpuProcessor.IsGPUAvailable() {
-		gpuUtil = float64(gpuStats.TxQueueSize) / float64(h.config.GPUConfig.TxWorkers)
+	// Get CPU stats with nil check
+	var cpuUtil float64
+	var avgCPULatency time.Duration
+	if h.cpuProcessor != nil && h.config != nil && h.config.CPUConfig != nil {
+		cpuStats := h.cpuProcessor.GetStats()
+		if h.config.CPUConfig.TxWorkers > 0 {
+			cpuUtil = float64(cpuStats.TxPoolRunning) / float64(h.config.CPUConfig.TxWorkers)
+		}
+		avgCPULatency = cpuStats.AvgProcessTime
 	}
 	
-	// Update load balancer metrics
-	h.loadBalancer.mu.Lock()
-	h.loadBalancer.cpuUtilization = cpuUtil
-	h.loadBalancer.gpuUtilization = gpuUtil
-	h.loadBalancer.avgCPULatency = cpuStats.AvgProcessTime
-	h.loadBalancer.avgGPULatency = gpuStats.AvgTxTime
-	
-	// Add performance snapshot
-	snapshot := PerformanceSnapshot{
-		Timestamp:     time.Now(),
-		CPULatency:    cpuStats.AvgProcessTime,
-		GPULatency:    gpuStats.AvgTxTime,
-		CPUThroughput: h.stats.CPUProcessed,
-		GPUThroughput: h.stats.GPUProcessed,
-		TotalTPS:      h.stats.CurrentTPS,
+	// Get GPU stats with nil check
+	var gpuUtil float64
+	var avgGPULatency time.Duration
+	if h.gpuProcessor != nil && h.config != nil && h.config.GPUConfig != nil {
+		if h.gpuProcessor.IsGPUAvailable() {
+			gpuStats := h.gpuProcessor.GetStats()
+			if h.config.GPUConfig.TxWorkers > 0 {
+				gpuUtil = float64(gpuStats.TxQueueSize) / float64(h.config.GPUConfig.TxWorkers)
+			}
+			avgGPULatency = gpuStats.AvgTxTime
+		}
 	}
 	
-	h.loadBalancer.performanceHistory = append(h.loadBalancer.performanceHistory, snapshot)
-	if len(h.loadBalancer.performanceHistory) > 100 {
-		h.loadBalancer.performanceHistory = h.loadBalancer.performanceHistory[1:]
+	// Update load balancer metrics with safety checks
+	if h.loadBalancer != nil {
+		h.loadBalancer.mu.Lock()
+		h.loadBalancer.cpuUtilization = cpuUtil
+		h.loadBalancer.gpuUtilization = gpuUtil
+		h.loadBalancer.avgCPULatency = avgCPULatency
+		h.loadBalancer.avgGPULatency = avgGPULatency
+		
+		// Add performance snapshot
+		snapshot := PerformanceSnapshot{
+			Timestamp:     time.Now(),
+			CPULatency:    avgCPULatency,
+			GPULatency:    avgGPULatency,
+			CPUThroughput: h.stats.CPUProcessed,
+			GPUThroughput: h.stats.GPUProcessed,
+			TotalTPS:      h.stats.CurrentTPS,
+		}
+		
+		h.loadBalancer.performanceHistory = append(h.loadBalancer.performanceHistory, snapshot)
+		if len(h.loadBalancer.performanceHistory) > 100 {
+			h.loadBalancer.performanceHistory = h.loadBalancer.performanceHistory[1:]
+		}
+		h.loadBalancer.mu.Unlock()
 	}
-	h.loadBalancer.mu.Unlock()
 	
-	// Update hybrid stats
+	// Update hybrid stats with safety checks
 	h.mu.Lock()
 	h.stats.CPUUtilization = cpuUtil
 	h.stats.GPUUtilization = gpuUtil
