@@ -156,8 +156,8 @@ task6(){
 }
 
 install_gpu_dependencies(){
-  # Install GPU dependencies automatically TASK 6A
-  log_wait "Installing GPU dependencies for high-performance RPC" && progress_bar
+  # Install GPU dependencies automatically for BOTH RPC and VALIDATOR TASK 6A
+  log_wait "Installing complete GPU acceleration stack (NVIDIA drivers + CUDA + OpenCL)" && progress_bar
   
   # Update package lists
   apt update
@@ -178,57 +178,49 @@ install_gpu_dependencies(){
     ubuntu-drivers autoinstall || apt install -y nvidia-driver-535 nvidia-utils-535
   fi
   
-  # Install CUDA Toolkit compatible with modern drivers
-  log_wait "Installing CUDA Toolkit 12.2 (compatible with RTX 4000 series)"
-  
-  # Ensure tmp directory exists
-  mkdir -p ./tmp
-  cd ./tmp
-  
-  # Use CUDA 12.2 which is compatible with driver 575
-  CUDA_INSTALLER="cuda_12.2.0_535.54.03_linux.run"
-  CUDA_URL="https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/$CUDA_INSTALLER"
-  
-  if [ ! -f "$CUDA_INSTALLER" ]; then
-    log_wait "Downloading CUDA Toolkit 12.2 (this may take several minutes)..."
-    wget --progress=bar:force "$CUDA_URL"
-    log_success "CUDA Toolkit download completed"
-  else
-    log_success "CUDA Toolkit installer already exists"
-  fi
-  
-  log_wait "Installing CUDA Toolkit 12.2 (this may take 5-10 minutes)..."
-  chmod +x "$CUDA_INSTALLER"
-  
-  # Run with verbose output instead of silent
-  if sh "$CUDA_INSTALLER" --toolkit --no-opengl-libs --override --verbose 2>&1 | tee cuda_install.log; then
-    log_success "CUDA Toolkit 12.2 installation completed"
-  else
-    log_error "CUDA Toolkit installation failed - check cuda_install.log for details"
-    tail -20 cuda_install.log
-  fi
-  
-  # Return to parent directory
-  cd ../
-  
-  # Install OpenCL support
-  log_wait "Installing OpenCL support"
+  # Install OpenCL support FIRST (required for compilation)
+  log_wait "Installing OpenCL support (required for blockchain compilation)"
   apt install -y opencl-headers ocl-icd-opencl-dev nvidia-opencl-dev mesa-opencl-icd intel-opencl-icd
   
-  # Install additional build tools
-  apt install -y cmake clinfo
+  # Install CUDA Toolkit via package manager (more reliable than .run installer)
+  log_wait "Installing CUDA Toolkit 12.6 via package manager (RTX 4000 compatible)"
   
-  # Set up CUDA environment
+  # Add NVIDIA CUDA repository
+  if [ ! -f "/etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list" ]; then
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+    dpkg -i cuda-keyring_1.1-1_all.deb
+    apt-get update
+  fi
+  
+  # Install CUDA toolkit (compatible with driver 575)
+  apt install -y cuda-toolkit-12-6 cuda-drivers-575
+  
+  # Install additional build tools
+  apt install -y cmake clinfo build-essential
+  
+  # Set up CUDA environment paths
   export CUDA_PATH=/usr/local/cuda
   export PATH=$PATH:$CUDA_PATH/bin
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64
   
-  # Add CUDA to system profile
-  echo 'export CUDA_PATH=/usr/local/cuda' >> /etc/profile
-  echo 'export PATH=$PATH:$CUDA_PATH/bin' >> /etc/profile
-  echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64' >> /etc/profile
+  # Add CUDA to system profile (persistent across reboots)
+  if ! grep -q "CUDA_PATH" /etc/profile; then
+    echo 'export CUDA_PATH=/usr/local/cuda' >> /etc/profile
+    echo 'export PATH=$PATH:$CUDA_PATH/bin' >> /etc/profile
+    echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64' >> /etc/profile
+  fi
   
-  log_success "GPU dependencies installed successfully"
+  # Add CUDA to bashrc for immediate availability
+  if ! grep -q "CUDA_PATH" ~/.bashrc; then
+    echo 'export CUDA_PATH=/usr/local/cuda' >> ~/.bashrc
+    echo 'export PATH=$PATH:$CUDA_PATH/bin' >> ~/.bashrc
+    echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_PATH/lib64' >> ~/.bashrc
+  fi
+  
+  # Source the environment
+  source ~/.bashrc
+  
+  log_success "Complete GPU acceleration stack installed (drivers + CUDA + OpenCL)"
 }
 
 configure_gpu_environment(){

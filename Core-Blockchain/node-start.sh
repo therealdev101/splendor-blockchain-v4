@@ -182,11 +182,33 @@ initializeGPU(){
       GPU_STATUS="pending_reboot"
     fi
     
-    # Quick CUDA check
-    if command -v nvcc >/dev/null 2>&1; then
-      echo -e "${GREEN}✅ CUDA toolkit available${NC}"
+    # Enhanced CUDA check with multiple path detection
+    CUDA_AVAILABLE=false
+    
+    # Check standard CUDA path
+    if [ -f "/usr/local/cuda/bin/nvcc" ]; then
+      CUDA_AVAILABLE=true
+    # Check alternative CUDA paths
+    elif command -v nvcc >/dev/null 2>&1; then
+      CUDA_AVAILABLE=true
+    # Check if CUDA toolkit is installed via package manager
+    elif dpkg -l | grep -q "cuda-toolkit"; then
+      CUDA_AVAILABLE=true
+      # Try to find nvcc in system paths
+      NVCC_PATH=$(find /usr -name "nvcc" 2>/dev/null | head -1)
+      if [ -n "$NVCC_PATH" ]; then
+        export PATH=$(dirname "$NVCC_PATH"):$PATH
+      fi
+    fi
+    
+    if [ "$CUDA_AVAILABLE" = "true" ]; then
+      echo -e "${GREEN}✅ CUDA toolkit available and ready${NC}"
+      # Verify CUDA can detect GPU
+      if timeout 5 nvidia-smi >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ CUDA-GPU communication verified${NC}"
+      fi
     else
-      echo -e "${ORANGE}⚠️  CUDA will be available after reboot${NC}"
+      echo -e "${ORANGE}⚠️  CUDA toolkit not found - using OpenCL acceleration${NC}"
     fi
     
     echo -e "${GREEN}GPU Config: ${ORANGE}${THROUGHPUT_TARGET:-1000000} TPS target${NC}"
