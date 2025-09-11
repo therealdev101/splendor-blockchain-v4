@@ -61,22 +61,22 @@ type HybridConfig struct {
 	GPUMemoryReservation   uint64  `json:"gpuMemoryReservation"`   // Reserved GPU memory
 }
 
-// DefaultHybridConfig returns optimized hybrid configuration for NVIDIA A40 (48GB VRAM) and 16+ core CPUs
+// DefaultHybridConfig returns optimized hybrid configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM) and 16+ core CPUs
 func DefaultHybridConfig() *HybridConfig {
 	return &HybridConfig{
 		CPUConfig:             gopool.DefaultProcessorConfig(),
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
-		GPUThreshold:          10000, // Use GPU for batches >= 10K (higher threshold for A40)
-		CPUGPURatio:           0.90,  // 90% GPU, 10% CPU for maximum A40 utilization
+		GPUThreshold:          5000,  // Use GPU for batches >= 5K (optimized for RTX 4000 SFF Ada)
+		CPUGPURatio:           0.80,  // 80% GPU, 20% CPU for RTX 4000 SFF Ada balance
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
-		MaxCPUUtilization:     0.90,  // 90% max CPU usage (16+ cores can handle more)
-		MaxGPUUtilization:     0.98,  // 98% max GPU usage (A40 enterprise-grade reliability)
-		LatencyThreshold:      30 * time.Millisecond,  // Ultra-low latency target for A40
-		ThroughputTarget:      10000000, // 10M TPS target for A40 (double RTX 4090)
-		MaxMemoryUsage:        128 * 1024 * 1024 * 1024, // 128GB total system memory
-		GPUMemoryReservation:  40 * 1024 * 1024 * 1024, // 40GB GPU reserved (A40 48GB)
+		MaxCPUUtilization:     0.85,  // 85% max CPU usage
+		MaxGPUUtilization:     0.95,  // 95% max GPU usage (RTX 4000 SFF Ada)
+		LatencyThreshold:      50 * time.Millisecond,  // Optimized latency for RTX 4000 SFF Ada
+		ThroughputTarget:      5000000, // 5M TPS target for RTX 4000 SFF Ada
+		MaxMemoryUsage:        64 * 1024 * 1024 * 1024, // 64GB total system memory
+		GPUMemoryReservation:  16 * 1024 * 1024 * 1024, // 16GB GPU reserved (RTX 4000 SFF Ada 20GB)
 	}
 }
 

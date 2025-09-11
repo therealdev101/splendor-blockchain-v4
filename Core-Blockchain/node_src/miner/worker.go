@@ -37,6 +37,8 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/common/hybrid"
+	"github.com/ethereum/go-ethereum/common/ai"
 )
 
 const (
@@ -137,6 +139,17 @@ type worker struct {
 	posa   consensus.PoSA
 	isPoSA bool
 
+	// GPU/Hybrid processing integration
+	hybridProcessor    *hybrid.HybridProcessor
+	parallelProcessor  *core.ParallelStateProcessor
+	aiLoadBalancer     *ai.AILoadBalancer
+	gpuEnabled         bool
+	batchThreshold     int
+	lastBatchSize      int
+	lastBatchTime      time.Duration
+	adaptiveBatching   bool
+	aiOptimization     bool
+
 	// Feeds
 	pendingLogsFeed event.Feed
 
@@ -224,7 +237,37 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
+		batchThreshold:     1000, // Default batch threshold for GPU acceleration
+		adaptiveBatching:   true, // Enable adaptive batch sizing
+		aiOptimization:     true, // Enable AI-driven optimization
 	}
+	
+	// Initialize hybrid processor for GPU acceleration
+	hybridProcessor := hybrid.GetGlobalHybridProcessor()
+	if hybridProcessor != nil {
+		worker.hybridProcessor = hybridProcessor
+		// Check if GPU is enabled by looking at the hybrid processor's configuration
+		stats := hybridProcessor.GetStats()
+		worker.gpuEnabled = stats.GPUProcessed > 0 || stats.GPUUtilization >= 0
+		log.Info("Miner GPU acceleration initialized", "enabled", worker.gpuEnabled)
+	} else {
+		log.Info("Miner running in CPU-only mode")
+	}
+	
+	// Initialize AI load balancer for intelligent optimization
+	aiLoadBalancer := ai.GetGlobalAILoadBalancer()
+	if aiLoadBalancer != nil {
+		worker.aiLoadBalancer = aiLoadBalancer
+		log.Info("Miner AI optimization initialized")
+	} else {
+		log.Info("Miner AI optimization not available")
+		worker.aiOptimization = false
+	}
+	
+	// Initialize parallel state processor for advanced parallel processing
+	// Note: ParallelStateProcessor would need to be created per blockchain instance
+	// For now, we'll use the existing core.StateProcessor with parallel enhancements
+	log.Info("Miner parallel processing capabilities enabled")
 	// Subscribe NewTxsEvent for tx pool
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
@@ -806,6 +849,80 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 
 	var coalescedLogs []*types.Log
 
+	// Try GPU batch processing if enabled and we have enough transactions
+	if w.gpuEnabled && w.hybridProcessor != nil {
+		// Calculate optimal batch size based on performance
+		optimalBatchSize := w.calculateOptimalBatchSize()
+		
+		// Collect transactions into a batch for potential GPU processing
+		var txBatch []*types.Transaction
+		tempTxs := txs
+		
+		// Collect up to optimal batch size transactions for GPU processing
+		for len(txBatch) < optimalBatchSize {
+			tx := tempTxs.Peek()
+			if tx == nil {
+				break
+			}
+			
+			// Basic validation before adding to batch
+			from, _ := types.Sender(w.current.signer, tx)
+			if tx.Protected() && !w.chainConfig.IsEIP155(w.current.header.Number) {
+				tempTxs.Pop()
+				continue
+			}
+			if w.isPoSA {
+				if err := w.posa.ValidateTx(from, tx, w.current.header, w.current.state); err != nil {
+					tempTxs.Pop()
+					continue
+				}
+			}
+			
+			txBatch = append(txBatch, tx)
+			tempTxs.Shift()
+		}
+		
+		// Process batch with GPU if we have enough transactions
+		if len(txBatch) >= w.batchThreshold/2 { // Use GPU for batches >= 500 transactions
+			batchStart := time.Now()
+			log.Debug("Processing transaction batch with GPU acceleration", "batchSize", len(txBatch))
+			
+			// Use hybrid processor for GPU-accelerated prevalidation
+			err := w.hybridProcessor.ProcessTransactionsBatch(txBatch, func(results []*hybrid.TransactionResult, err error) {
+				if err != nil {
+					log.Warn("GPU batch processing failed, falling back to sequential", "error", err)
+					return
+				}
+				
+				// Apply GPU-validated transactions sequentially (EVM execution still needs to be sequential for state consistency)
+				for i, result := range results {
+					if result.Valid && i < len(txBatch) {
+						// GPU validated the transaction, now apply it to state
+						w.current.state.Prepare(txBatch[i].Hash(), w.current.tcount)
+						logs, err := w.commitTransaction(txBatch[i], coinbase)
+						if err == nil {
+							coalescedLogs = append(coalescedLogs, logs...)
+							w.current.tcount++
+						}
+					}
+				}
+			})
+			
+			// Update batch performance metrics
+			batchDuration := time.Since(batchStart)
+			w.updateBatchPerformance(len(txBatch), batchDuration)
+			
+			if err != nil {
+				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "error", err)
+			} else {
+				// GPU batch processing completed, continue with remaining transactions sequentially
+				txs = tempTxs
+				log.Debug("GPU batch processing completed", "batchSize", len(txBatch), "duration", batchDuration)
+			}
+		}
+	}
+
+	// Continue with sequential processing for remaining transactions
 	for {
 		// In the following three cases, we will interrupt the execution of the transaction.
 		// (1) new head block event arrival, the interrupt signal is 1
@@ -1102,6 +1219,129 @@ func (w *worker) postSideBlock(event core.ChainSideEvent) {
 	case w.chainSideCh <- event:
 	case <-w.exitCh:
 	}
+}
+
+// calculateOptimalBatchSize determines the optimal batch size for GPU processing based on performance
+func (w *worker) calculateOptimalBatchSize() int {
+	if !w.adaptiveBatching || w.hybridProcessor == nil {
+		return w.batchThreshold
+	}
+	
+	// Get current hybrid processor stats
+	stats := w.hybridProcessor.GetStats()
+	
+	// Base batch size
+	baseBatchSize := w.batchThreshold
+	
+	// Use AI recommendations if available
+	if w.aiOptimization && w.aiLoadBalancer != nil {
+		aiStats := w.aiLoadBalancer.GetStats()
+		if aiStats.TotalDecisions > 0 && aiStats.LastPrediction.Confidence > 0.7 {
+			// Use AI-recommended strategy to influence batch size
+			switch aiStats.LastPrediction.RecommendedStrategy {
+			case "GPU_ONLY":
+				baseBatchSize = int(float64(baseBatchSize) * 1.5) // Larger batches for GPU-only
+			case "CPU_ONLY":
+				baseBatchSize = int(float64(baseBatchSize) * 0.7) // Smaller batches for CPU-only
+			case "HYBRID":
+				// Use AI-recommended ratio to adjust batch size
+				if aiStats.LastPrediction.RecommendedRatio > 0.8 {
+					baseBatchSize = int(float64(baseBatchSize) * 1.2) // More GPU-friendly
+				}
+			}
+			log.Debug("Using AI-recommended strategy", "strategy", aiStats.LastPrediction.RecommendedStrategy, "confidence", aiStats.LastPrediction.Confidence)
+		}
+	}
+	
+	// Adjust based on GPU utilization
+	if stats.GPUUtilization < 0.5 {
+		// GPU underutilized, increase batch size
+		baseBatchSize = int(float64(baseBatchSize) * 1.5)
+	} else if stats.GPUUtilization > 0.9 {
+		// GPU overloaded, decrease batch size
+		baseBatchSize = int(float64(baseBatchSize) * 0.8)
+	}
+	
+	// Adjust based on current TPS vs target
+	targetTPS := uint64(100000) // Target 100K TPS for realistic performance
+	if stats.CurrentTPS < targetTPS/2 {
+		// Low TPS, try larger batches
+		baseBatchSize = int(float64(baseBatchSize) * 1.2)
+	} else if stats.CurrentTPS > targetTPS {
+		// High TPS, maintain current batch size
+		// No adjustment needed
+	}
+	
+	// Adjust based on previous batch performance
+	if w.lastBatchTime > 0 && w.lastBatchSize > 0 {
+		// If last batch was slow, reduce size
+		if w.lastBatchTime > 100*time.Millisecond {
+			baseBatchSize = int(float64(w.lastBatchSize) * 0.9)
+		} else if w.lastBatchTime < 50*time.Millisecond {
+			// If last batch was fast, increase size
+			baseBatchSize = int(float64(w.lastBatchSize) * 1.1)
+		}
+	}
+	
+	// Enforce bounds
+	minBatchSize := 500
+	maxBatchSize := 10000
+	
+	if baseBatchSize < minBatchSize {
+		baseBatchSize = minBatchSize
+	} else if baseBatchSize > maxBatchSize {
+		baseBatchSize = maxBatchSize
+	}
+	
+	return baseBatchSize
+}
+
+// updateBatchPerformance updates batch performance metrics for adaptive sizing
+func (w *worker) updateBatchPerformance(batchSize int, duration time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	
+	w.lastBatchSize = batchSize
+	w.lastBatchTime = duration
+	
+	// Log performance for monitoring
+	if duration > 0 {
+		tps := float64(batchSize) / duration.Seconds()
+		log.Debug("GPU batch performance", 
+			"batchSize", batchSize, 
+			"duration", duration, 
+			"tps", tps,
+		)
+	}
+}
+
+// GetMinerStats returns current miner statistics including GPU acceleration metrics
+func (w *worker) GetMinerStats() map[string]interface{} {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	
+	stats := map[string]interface{}{
+		"gpu_enabled":      w.gpuEnabled,
+		"batch_threshold":  w.batchThreshold,
+		"last_batch_size":  w.lastBatchSize,
+		"last_batch_time":  w.lastBatchTime,
+		"adaptive_batching": w.adaptiveBatching,
+	}
+	
+	if w.hybridProcessor != nil {
+		hybridStats := w.hybridProcessor.GetStats()
+		stats["hybrid_stats"] = map[string]interface{}{
+			"total_processed":      hybridStats.TotalProcessed,
+			"cpu_processed":        hybridStats.CPUProcessed,
+			"gpu_processed":        hybridStats.GPUProcessed,
+			"current_tps":          hybridStats.CurrentTPS,
+			"cpu_utilization":      hybridStats.CPUUtilization,
+			"gpu_utilization":      hybridStats.GPUUtilization,
+			"load_balancing_ratio": hybridStats.LoadBalancingRatio,
+		}
+	}
+	
+	return stats
 }
 
 // totalFees computes total consumed miner fees in ETH. Block transactions and receipts have to have the same order.

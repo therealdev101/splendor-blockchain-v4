@@ -1,0 +1,89 @@
+# CUDA-enabled Makefile for Splendor blockchain
+# This extends the standard Makefile with CUDA support
+
+# CUDA configuration
+CUDA_PATH ?= /usr/local/cuda
+NVCC = $(CUDA_PATH)/bin/nvcc
+CUDA_ARCH ?= sm_89  # For RTX 4000 SFF Ada (Ada Lovelace architecture)
+CUDA_FLAGS = -arch=$(CUDA_ARCH) -O3 -Xcompiler -fPIC
+
+# Go build flags for CUDA
+CGO_CFLAGS = -I$(CUDA_PATH)/include
+CGO_LDFLAGS = -L$(CUDA_PATH)/lib64 -lcuda -lcudart -lOpenCL
+
+# CUDA source files
+CUDA_SOURCES = common/gpu/cuda_kernels.cu
+CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
+
+# Default target
+.PHONY: all
+all: cuda-objects geth
+
+# Compile CUDA kernels
+.PHONY: cuda-objects
+cuda-objects: $(CUDA_OBJECTS)
+
+%.o: %.cu
+	$(NVCC) $(CUDA_FLAGS) -c $< -o $@
+
+# Build geth with CUDA support
+.PHONY: geth-cuda
+geth-cuda: cuda-objects
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS) $(CUDA_OBJECTS)" go build -o build/bin/geth ./cmd/geth
+
+# Build all tools with CUDA support
+.PHONY: all-cuda
+all-cuda: cuda-objects
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run build/ci.go install
+
+# Test CUDA functionality
+.PHONY: test-cuda
+test-cuda: cuda-objects
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test -v ./common/gpu/...
+
+# Clean CUDA objects
+.PHONY: clean-cuda
+clean-cuda:
+	rm -f $(CUDA_OBJECTS)
+
+# Clean all
+.PHONY: clean
+clean: clean-cuda
+	go clean -cache
+	rm -fr build/_workspace/pkg/ $(GOBIN)/*
+
+# Check CUDA installation
+.PHONY: check-cuda
+check-cuda:
+	@echo "Checking CUDA installation..."
+	@$(NVCC) --version || (echo "CUDA not found. Please install CUDA toolkit." && exit 1)
+	@echo "CUDA installation OK"
+
+# GPU info
+.PHONY: gpu-info
+gpu-info:
+	@echo "GPU Information:"
+	@nvidia-smi || echo "nvidia-smi not available"
+	@echo "CUDA Path: $(CUDA_PATH)"
+	@echo "CUDA Architecture: $(CUDA_ARCH)"
+
+# Help
+.PHONY: help-cuda
+help-cuda:
+	@echo "CUDA Build Targets:"
+	@echo "  geth-cuda     - Build geth with CUDA support"
+	@echo "  all-cuda      - Build all tools with CUDA support"
+	@echo "  test-cuda     - Run CUDA tests"
+	@echo "  cuda-objects  - Compile CUDA kernels only"
+	@echo "  check-cuda    - Check CUDA installation"
+	@echo "  gpu-info      - Show GPU information"
+	@echo "  clean-cuda    - Clean CUDA objects"
+	@echo ""
+	@echo "Environment Variables:"
+	@echo "  CUDA_PATH     - Path to CUDA installation (default: /usr/local/cuda)"
+	@echo "  CUDA_ARCH     - CUDA architecture (default: sm_89 for RTX 4000 SFF Ada)"
+	@echo ""
+	@echo "Example usage:"
+	@echo "  make -f Makefile.cuda check-cuda"
+	@echo "  make -f Makefile.cuda geth-cuda"
+	@echo "  CUDA_ARCH=sm_89 make -f Makefile.cuda geth-cuda  # For RTX 4000 SFF Ada"
