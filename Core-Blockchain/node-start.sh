@@ -48,6 +48,14 @@ progress_bar() {
 #########################################################################
 source ./.env
 source ~/.bashrc
+
+# Set up CUDA environment by default if GPU is enabled
+if [ "$ENABLE_GPU" = "true" ]; then
+  export CUDA_PATH=/usr/local/cuda
+  export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+  export PATH=/usr/local/cuda/bin:$PATH
+  echo -e "${GREEN}🚀 CUDA environment activated${NC}"
+fi
 #########################################################################
 
 #+-----------------------------------------------------------------------------------------------+
@@ -114,6 +122,13 @@ startRpc(){
         tmux new-session -d -s node$node_num
         tmux send-keys -t node$node_num "ulimit -n 65536" Enter
         tmux send-keys -t node$node_num "export GOMAXPROCS=20" Enter
+        # Pass GPU environment to tmux session
+        if [ "$ENABLE_GPU" = "true" ]; then
+          tmux send-keys -t node$node_num "export CUDA_PATH=/usr/local/cuda" Enter
+          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" Enter
+          tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
+          tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
+        fi
         tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=5000 --txpool.globalslots=100000 --txpool.accountqueue=5000 --txpool.globalqueue=100000 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
       fi
     fi
@@ -138,6 +153,13 @@ startValidator(){
         tmux new-session -d -s node$node_num
         tmux send-keys -t node$node_num "ulimit -n 65536" Enter
         tmux send-keys -t node$node_num "export GOMAXPROCS=20" Enter
+        # Pass GPU environment to tmux session
+        if [ "$ENABLE_GPU" = "true" ]; then
+          tmux send-keys -t node$node_num "export CUDA_PATH=/usr/local/cuda" Enter
+          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" Enter
+          tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
+          tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
+        fi
         tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=snap --gcmode=full --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=5000 --txpool.globalslots=100000 --txpool.accountqueue=5000 --txpool.globalqueue=100000 --maxpeers=25 --rpc.txfeecap=0 --http --http.addr 0.0.0.0 --http.api eth,net,web3,txpool,miner,debug --ws --ws.addr 0.0.0.0 --nat any --verbosity=3 console" Enter
       fi
     fi
@@ -181,6 +203,9 @@ finalize(){
   welcome
   initializeGPU
   
+  # Initialize AI status tracking
+  AI_STATUS="not_available"
+  
   # Start vLLM AI service if available
   if systemctl list-unit-files | grep -q "vllm-phi3.service"; then
     echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
@@ -188,17 +213,25 @@ finalize(){
     
     if systemctl start vllm-phi3 2>/dev/null; then
       log_success "vLLM AI service started successfully"
+      AI_STATUS="service_started"
       
       # Wait for API to be ready (non-blocking)
       for i in {1..10}; do
         if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
           log_success "vLLM API ready - AI load balancing active"
+          AI_STATUS="fully_active"
           break
         fi
         sleep 2
       done
+      
+      # If API didn't respond but service started, it's still starting up
+      if [ "$AI_STATUS" = "service_started" ]; then
+        AI_STATUS="starting_up"
+      fi
     else
       log_wait "vLLM service will start after GPU drivers are activated"
+      AI_STATUS="pending_reboot"
     fi
   fi
   
@@ -242,12 +275,21 @@ finalize(){
   # Final status report
   echo -e "\n${GREEN}+------------------ SYSTEM STATUS -------------------+${NC}"
   
-  # Check AI system
-  if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
-    echo -e "${GREEN}✅ AI System: vLLM Phi-3 Mini active (5M+ TPS ready)${NC}"
-  else
-    echo -e "${ORANGE}⚠️  AI System: Will activate after reboot${NC}"
-  fi
+  # Check AI system based on tracked status
+  case "$AI_STATUS" in
+    "fully_active")
+      echo -e "${GREEN}✅ AI System: vLLM Phi-3 Mini active (5M+ TPS ready)${NC}"
+      ;;
+    "service_started"|"starting_up")
+      echo -e "${GREEN}✅ AI System: vLLM service active (API initializing)${NC}"
+      ;;
+    "pending_reboot")
+      echo -e "${ORANGE}⚠️  AI System: Will activate after reboot${NC}"
+      ;;
+    *)
+      echo -e "${ORANGE}⚠️  AI System: Not available${NC}"
+      ;;
+  esac
   
   # Check GPU status
   if timeout 3 nvidia-smi >/dev/null 2>&1; then

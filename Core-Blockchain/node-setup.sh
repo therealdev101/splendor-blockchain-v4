@@ -314,6 +314,17 @@ task6_gpu(){
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
   
+  # Add CUDA environment to .env file for persistent activation
+  log_wait "Adding CUDA environment to .env for automatic activation"
+  if ! grep -q "CUDA_PATH" ./.env; then
+    cat >> ./.env << EOF
+
+# CUDA Environment Configuration (Auto-activated by node-start.sh)
+CUDA_PATH=/usr/local/cuda
+CUDA_VISIBLE_DEVICES=0
+EOF
+  fi
+  
   # Verify CUDA installation
   if [ -f "/usr/local/cuda/bin/nvcc" ]; then
     log_success "CUDA compiler found at /usr/local/cuda/bin/nvcc"

@@ -44,6 +44,11 @@ import (
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 
+	// GPU and AI acceleration imports
+	"github.com/ethereum/go-ethereum/common/hybrid"
+	"github.com/ethereum/go-ethereum/common/ai"
+	"github.com/ethereum/go-ethereum/common/gpu"
+
 	"gopkg.in/urfave/cli.v1"
 )
 
@@ -321,6 +326,9 @@ func startNode(ctx *cli.Context, stack *node.Node, backend ethapi.Backend) {
 	// Start up the node itself
 	utils.StartNode(ctx, stack)
 
+	// Initialize GPU acceleration if enabled
+	initializeGPUAcceleration(ctx)
+
 	// Unlock any account specifically requested
 	unlockAccounts(ctx, stack)
 
@@ -411,6 +419,70 @@ func startNode(ctx *cli.Context, stack *node.Node, backend ethapi.Backend) {
 			utils.Fatalf("Failed to start mining: %v", err)
 		}
 	}
+}
+
+// initializeGPUAcceleration initializes GPU and AI acceleration if enabled
+func initializeGPUAcceleration(ctx *cli.Context) {
+	// Check if GPU acceleration is enabled via environment variable
+	enableGPU := os.Getenv("ENABLE_GPU")
+	if enableGPU != "true" {
+		log.Info("GPU acceleration disabled")
+		return
+	}
+
+	log.Info("Initializing GPU acceleration...")
+
+	// Create hybrid processor configuration
+	hybridConfig := &hybrid.HybridConfig{
+		EnableGPU:             true,
+		GPUThreshold:          8000,  // Minimum 8K transactions for GPU
+		CPUGPURatio:           0.85,  // 85% GPU, 15% CPU
+		AdaptiveLoadBalancing: true,
+		PerformanceMonitoring: true,
+		MaxCPUUtilization:     0.85,
+		MaxGPUUtilization:     0.95,
+		ThroughputTarget:      8000000, // 8M TPS target
+		GPUConfig: &gpu.GPUConfig{
+			PreferredGPUType: gpu.GPUTypeCUDA,
+			MaxBatchSize:     80000,
+			MaxMemoryUsage:   17179869184, // 16GB
+			HashWorkers:      24,
+			SignatureWorkers: 24,
+			TxWorkers:        24,
+			EnablePipelining: true,
+		},
+	}
+
+	// Initialize global hybrid processor
+	if err := hybrid.InitGlobalHybridProcessor(hybridConfig); err != nil {
+		log.Warn("Failed to initialize GPU acceleration, continuing with CPU only", "error", err)
+		return
+	}
+
+	// Initialize AI load balancer if available
+	aiConfig := &ai.AIConfig{
+		LLMEndpoint:         "http://localhost:8000/v1/completions",
+		LLMModel:           "microsoft/Phi-3-mini-4k-instruct",
+		LLMTimeout:         2 * time.Second,
+		UpdateInterval:     500 * time.Millisecond,
+		HistorySize:        100,
+		LearningRate:       0.15,
+		ConfidenceThreshold: 0.75,
+	}
+
+	hybridProcessor := hybrid.GetGlobalHybridProcessor()
+	if hybridProcessor != nil {
+		if err := ai.InitGlobalAILoadBalancer(aiConfig, hybridProcessor); err != nil {
+			log.Warn("Failed to initialize AI load balancer", "error", err)
+		} else {
+			log.Info("AI-powered GPU load balancing activated")
+		}
+	}
+
+	log.Info("GPU acceleration initialized successfully", 
+		"gpuThreshold", hybridConfig.GPUThreshold,
+		"targetTPS", hybridConfig.ThroughputTarget,
+	)
 }
 
 // unlockAccounts unlocks any account specifically requested.

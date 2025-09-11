@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/node_src/common/hybrid"
+	"github.com/ethereum/go-ethereum/common/hybrid"
 )
 
 // AILoadBalancer uses a local LLM to make intelligent load balancing decisions

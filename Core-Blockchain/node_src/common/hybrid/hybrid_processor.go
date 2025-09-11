@@ -10,8 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/node_src/common/gopool"
-	"github.com/ethereum/go-ethereum/node_src/common/gpu"
+	"github.com/ethereum/go-ethereum/common/gopool"
+	"github.com/ethereum/go-ethereum/common/gpu"
 )
 
 // HybridProcessor combines CPU and GPU processing with intelligent load balancing

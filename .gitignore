@@ -140,3 +140,6 @@ server-configs/
 monitoring/
 enode-api-server.js
 splendor-rpc.org
+
+# CUDA wallet testing (contains private keys and test data)
+cuda-wallet-test/
