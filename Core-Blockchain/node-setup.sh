@@ -768,6 +768,14 @@ createRpc(){
 }
 
 createValidator(){
+  task1
+  task2
+  task3
+  task4
+  task5
+  task6
+  task6_gpu
+  task7
   if [[ $totalValidator -gt 0 && "$NOPK" != "true" ]]; then
       if [ "${NOPK}" != "true" ]; then task8; fi
   fi
