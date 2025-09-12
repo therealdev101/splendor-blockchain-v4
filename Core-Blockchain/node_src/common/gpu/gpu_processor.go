@@ -121,11 +121,11 @@ type GPUConfig struct {
 func DefaultGPUConfig() *GPUConfig {
 	return &GPUConfig{
 		PreferredGPUType: GPUTypeOpenCL, // Prefer OpenCL for RTX 4000 SFF Ada
-		MaxBatchSize:     50000,         // 50K batches optimized for RTX 4000 SFF Ada
-		MaxMemoryUsage:   16 * 1024 * 1024 * 1024, // 16GB GPU memory (leave 4GB for system)
-		HashWorkers:      20,            // 20 workers for RTX 4000 SFF Ada
-		SignatureWorkers: 20,            // 20 workers for signature verification
-		TxWorkers:        20,            // 20 workers for transaction processing
+		MaxBatchSize:     200000,        // 4x increase - 200K batches for massive throughput
+		MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for system)
+		HashWorkers:      50,            // 2.5x increase - 50 workers for RTX 4000 SFF Ada
+		SignatureWorkers: 50,            // 2.5x increase - 50 workers for signature verification
+		TxWorkers:        50,            // 2.5x increase - 50 workers for transaction processing
 		EnablePipelining: true,
 	}
 }
