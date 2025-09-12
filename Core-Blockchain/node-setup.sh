@@ -165,9 +165,10 @@ task6(){
     # Update CGO flags to link CUDA library
     log_wait "Updating CGO flags for CUDA linking"
     if [ -f "common/gpu/libcuda_kernels.so" ]; then
-      # Add CUDA library path to gpu_processor.go
-      sed -i '/#cgo LDFLAGS: -lOpenCL/c\#cgo LDFLAGS: -lOpenCL -L./common/gpu -lcuda_kernels -lcudart -L/usr/local/cuda/lib64' common/gpu/gpu_processor.go
-      log_success "CUDA library linked successfully"
+      # Add CUDA library path to gpu_processor.go with absolute path
+      CURRENT_DIR=$(pwd)
+      sed -i "/#cgo LDFLAGS: -lOpenCL/c\\#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lcuda_kernels -lcudart -L/usr/local/cuda/lib64" common/gpu/gpu_processor.go
+      log_success "CUDA library linked successfully with absolute path: ${CURRENT_DIR}/common/gpu"
     fi
   else
     log_wait "CUDA not available - building CPU-only version"
