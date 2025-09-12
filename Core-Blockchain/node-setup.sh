@@ -155,6 +155,108 @@ task6(){
   log_success "Done"
 }
 
+detect_gpu_architecture(){
+  # Advanced GPU detection and architecture identification
+  log_wait "Performing advanced GPU hardware detection"
+  
+  GPU_INFO=$(lspci | grep -i nvidia || echo "No NVIDIA GPU detected")
+  echo "GPU Hardware: $GPU_INFO"
+  
+  # Detect specific GPU architectures and their CUDA requirements
+  if echo "$GPU_INFO" | grep -qi "RTX 4000\|RTX 40\|Ada Generation\|AD104\|AD106\|AD107\|AD102\|AD103"; then
+    GPU_ARCH="Ada Lovelace"
+    RECOMMENDED_DRIVER="575"
+    CUDA_VERSION="12.6"
+    CUDA_ARCH="sm_89"
+    log_success "Detected: $GPU_ARCH architecture (RTX 4000 series)"
+  elif echo "$GPU_INFO" | grep -qi "RTX 30\|RTX 3060\|RTX 3070\|RTX 3080\|RTX 3090\|GA102\|GA104\|GA106"; then
+    GPU_ARCH="Ampere"
+    RECOMMENDED_DRIVER="535"
+    CUDA_VERSION="12.2"
+    CUDA_ARCH="sm_86"
+    log_success "Detected: $GPU_ARCH architecture (RTX 30 series)"
+  elif echo "$GPU_INFO" | grep -qi "RTX 20\|RTX 2060\|RTX 2070\|RTX 2080\|TU102\|TU104\|TU106"; then
+    GPU_ARCH="Turing"
+    RECOMMENDED_DRIVER="535"
+    CUDA_VERSION="12.2"
+    CUDA_ARCH="sm_75"
+    log_success "Detected: $GPU_ARCH architecture (RTX 20 series)"
+  elif echo "$GPU_INFO" | grep -qi "GTX 16\|GTX 1660\|GTX 1650\|TU116\|TU117"; then
+    GPU_ARCH="Turing"
+    RECOMMENDED_DRIVER="535"
+    CUDA_VERSION="12.2"
+    CUDA_ARCH="sm_75"
+    log_success "Detected: $GPU_ARCH architecture (GTX 16 series)"
+  elif echo "$GPU_INFO" | grep -qi "Tesla\|Quadro\|A100\|A40\|A30\|A10"; then
+    GPU_ARCH="Professional"
+    RECOMMENDED_DRIVER="535"
+    CUDA_VERSION="12.2"
+    CUDA_ARCH="sm_80"
+    log_success "Detected: Professional GPU ($GPU_ARCH)"
+  else
+    GPU_ARCH="Generic"
+    RECOMMENDED_DRIVER="535"
+    CUDA_VERSION="12.2"
+    CUDA_ARCH="sm_60"
+    log_wait "Unknown GPU - using generic settings"
+  fi
+  
+  echo "Architecture: $GPU_ARCH"
+  echo "Recommended Driver: $RECOMMENDED_DRIVER"
+  echo "CUDA Version: $CUDA_VERSION"
+  echo "CUDA Architecture: $CUDA_ARCH"
+}
+
+install_cuda_from_runfile(){
+  # Install CUDA from .run file for maximum compatibility
+  log_wait "Installing CUDA $CUDA_VERSION from official installer"
+  
+  # Determine the correct CUDA installer URL based on version
+  case $CUDA_VERSION in
+    "12.6")
+      CUDA_URL="https://developer.download.nvidia.com/compute/cuda/12.6.2/local_installers/cuda_12.6.2_560.35.03_linux.run"
+      CUDA_FILE="cuda_12.6.2_560.35.03_linux.run"
+      ;;
+    "12.2")
+      CUDA_URL="https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda_12.2.2_535.104.05_linux.run"
+      CUDA_FILE="cuda_12.2.2_535.104.05_linux.run"
+      ;;
+    *)
+      CUDA_URL="https://developer.download.nvidia.com/compute/cuda/12.6.2/local_installers/cuda_12.6.2_560.35.03_linux.run"
+      CUDA_FILE="cuda_12.6.2_560.35.03_linux.run"
+      ;;
+  esac
+  
+  # Download CUDA installer if not already present
+  if [ ! -f "/tmp/$CUDA_FILE" ]; then
+    log_wait "Downloading CUDA installer ($CUDA_FILE)"
+    cd /tmp
+    wget "$CUDA_URL" -O "$CUDA_FILE"
+    chmod +x "$CUDA_FILE"
+  else
+    log_success "CUDA installer already downloaded"
+  fi
+  
+  # Install CUDA toolkit (skip driver installation if already installed)
+  log_wait "Installing CUDA toolkit (this may take several minutes)"
+  if nvidia-smi >/dev/null 2>&1; then
+    # Driver already installed, install toolkit only
+    /tmp/$CUDA_FILE --silent --toolkit --override
+  else
+    # Install both driver and toolkit
+    /tmp/$CUDA_FILE --silent --driver --toolkit --override
+  fi
+  
+  # Verify CUDA installation
+  if [ -f "/usr/local/cuda/bin/nvcc" ]; then
+    CUDA_INSTALLED_VERSION=$(/usr/local/cuda/bin/nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+    log_success "CUDA $CUDA_INSTALLED_VERSION installed successfully"
+  else
+    log_error "CUDA installation failed"
+    return 1
+  fi
+}
+
 install_gpu_dependencies(){
   # Install GPU dependencies automatically for BOTH RPC and VALIDATOR TASK 6A
   log_wait "Installing complete GPU acceleration stack (NVIDIA drivers + CUDA + OpenCL)" && progress_bar
@@ -162,41 +264,61 @@ install_gpu_dependencies(){
   # Update package lists
   apt update
   
-  # Detect GPU and install appropriate NVIDIA drivers
-  log_wait "Detecting GPU hardware"
-  GPU_INFO=$(lspci | grep -i nvidia || echo "No NVIDIA GPU detected")
-  echo "GPU detected: $GPU_INFO"
+  # Detect GPU architecture and determine optimal settings
+  detect_gpu_architecture
   
-  if echo "$GPU_INFO" | grep -q "RTX 4000\|RTX 40\|Ada Generation\|AD104"; then
-    log_wait "Installing NVIDIA drivers for RTX 4000 series (Ada Generation)"
-    apt install -y nvidia-driver-575-open nvidia-utils-575
-  elif echo "$GPU_INFO" | grep -q "RTX 30\|RTX 20\|GTX 16"; then
-    log_wait "Installing NVIDIA drivers for RTX 30/20/GTX 16 series"
-    apt install -y nvidia-driver-535 nvidia-utils-535
+  # Check if NVIDIA drivers are already installed
+  if nvidia-smi >/dev/null 2>&1; then
+    log_success "NVIDIA drivers already installed and working"
+    CURRENT_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -1)
+    echo "Current driver version: $CURRENT_DRIVER"
   else
-    log_wait "Installing recommended NVIDIA drivers (auto-detect)"
-    ubuntu-drivers autoinstall || apt install -y nvidia-driver-535 nvidia-utils-535
+    log_wait "Installing NVIDIA drivers for $GPU_ARCH architecture"
+    
+    # Install appropriate NVIDIA drivers based on detected architecture
+    case $GPU_ARCH in
+      "Ada Lovelace")
+        apt install -y nvidia-driver-575-open nvidia-utils-575 || apt install -y nvidia-driver-575 nvidia-utils-575
+        ;;
+      "Ampere"|"Turing"|"Professional")
+        apt install -y nvidia-driver-535 nvidia-utils-535
+        ;;
+      *)
+        ubuntu-drivers autoinstall || apt install -y nvidia-driver-535 nvidia-utils-535
+        ;;
+    esac
   fi
   
   # Install OpenCL support FIRST (required for compilation)
   log_wait "Installing OpenCL support (required for blockchain compilation)"
-  apt install -y opencl-headers ocl-icd-opencl-dev nvidia-opencl-dev mesa-opencl-icd intel-opencl-icd
+  apt install -y opencl-headers ocl-icd-opencl-dev mesa-opencl-icd intel-opencl-icd
   
-  # Install CUDA Toolkit via package manager (more reliable than .run installer)
-  log_wait "Installing CUDA Toolkit 12.6 via package manager (RTX 4000 compatible)"
-  
-  # Add NVIDIA CUDA repository
-  if [ ! -f "/etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list" ]; then
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-    dpkg -i cuda-keyring_1.1-1_all.deb
-    apt-get update
+  # Install NVIDIA OpenCL if NVIDIA GPU detected
+  if echo "$GPU_INFO" | grep -qi nvidia; then
+    apt install -y nvidia-opencl-dev || log_wait "NVIDIA OpenCL will be available after reboot"
   fi
   
-  # Install CUDA toolkit (compatible with driver 575)
-  apt install -y cuda-toolkit-12-6 cuda-drivers-575
+  # Check if CUDA is already installed
+  if command -v nvcc >/dev/null 2>&1; then
+    EXISTING_CUDA=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+    log_success "CUDA $EXISTING_CUDA already installed"
+    
+    # Check if installed version matches recommended version
+    if [[ "$EXISTING_CUDA" != "$CUDA_VERSION"* ]]; then
+      log_wait "Upgrading CUDA from $EXISTING_CUDA to $CUDA_VERSION"
+      install_cuda_from_runfile
+    fi
+  else
+    # Install CUDA from official installer
+    install_cuda_from_runfile
+  fi
   
   # Install additional build tools
-  apt install -y cmake clinfo build-essential
+  log_wait "Installing additional build tools"
+  apt install -y cmake clinfo build-essential gcc-9 g++-9
+  
+  # Set GCC 9 as default for CUDA compatibility
+  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 --slave /usr/bin/g++ g++ /usr/bin/g++-9 || true
   
   # Set up CUDA environment paths
   export CUDA_PATH=/usr/local/cuda
@@ -220,7 +342,19 @@ install_gpu_dependencies(){
   # Source the environment
   source ~/.bashrc
   
+  # Update Makefile.cuda with detected architecture
+  if [ -f "node_src/Makefile.cuda" ]; then
+    log_wait "Updating CUDA Makefile with detected architecture ($CUDA_ARCH)"
+    sed -i "s/CUDA_ARCH ?= sm_89/CUDA_ARCH ?= $CUDA_ARCH/" node_src/Makefile.cuda
+  fi
+  
   log_success "Complete GPU acceleration stack installed (drivers + CUDA + OpenCL)"
+  
+  # Display GPU information
+  if nvidia-smi >/dev/null 2>&1; then
+    echo -e "\n${GREEN}GPU Information:${NC}"
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+  fi
 }
 
 configure_gpu_environment(){
