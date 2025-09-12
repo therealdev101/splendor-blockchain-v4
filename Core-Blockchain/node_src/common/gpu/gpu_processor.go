@@ -15,12 +15,12 @@ import (
 )
 
 /*
-#cgo LDFLAGS: -lOpenCL
+#cgo LDFLAGS: -lOpenCL -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64
 
 #include <stdlib.h>
 #include <string.h>
 
-// CUDA real function declarations (implemented in cuda_kernels.cu via libsplendor_cuda)
+// CUDA function declarations (implemented in cuda_kernels.cu)
 int cuda_init_device();
 int cuda_process_transactions(void* txs, int count, void* results);
 int cuda_process_hashes(void* hashes, int count, void* results);

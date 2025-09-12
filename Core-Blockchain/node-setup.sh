@@ -160,36 +160,52 @@ task6(){
   # First, compile CUDA kernels if CUDA is available
   if command -v nvcc >/dev/null 2>&1; then
     log_wait "Compiling CUDA kernels for GPU acceleration"
-    make -f Makefile.gpu cuda || log_wait "CUDA compilation will complete after reboot"
     
-    # Update CGO flags to link CUDA library
-    log_wait "Updating CGO flags for CUDA linking"
-    if [ -f "common/gpu/libcuda_kernels.so" ]; then
-      # Add CUDA library path to gpu_processor.go with absolute path
+    # Build CUDA library using the proper Makefile
+    if make -f Makefile.cuda cuda-lib; then
+      log_success "CUDA library compiled successfully"
+      
+      # Update CGO flags in gpu_processor.go to link the CUDA library
+      log_wait "Updating CGO flags for CUDA linking"
       CURRENT_DIR=$(pwd)
-      sed -i "/#cgo LDFLAGS: -lOpenCL/c\\#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lcuda_kernels -lcudart -L/usr/local/cuda/lib64" common/gpu/gpu_processor.go
+      
+      # Update the CGO LDFLAGS to include the CUDA library
+      sed -i "/#cgo LDFLAGS: -lOpenCL/c\\#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64" common/gpu/gpu_processor.go
       
       # Copy CUDA library to system library path for runtime loading
-      log_wait "Installing CUDA library to system path for runtime loading"
-      cp common/gpu/libcuda_kernels.so /usr/local/lib/
-      ldconfig
-      
-      # Add library path to LD_LIBRARY_PATH in system profile
-      if ! grep -q "LD_LIBRARY_PATH.*common/gpu" /etc/profile; then
-        echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib" >> /etc/profile
+      if [ -f "common/gpu/libsplendor_cuda.a" ]; then
+        log_wait "Installing CUDA library to system path for runtime loading"
+        cp common/gpu/libsplendor_cuda.a /usr/local/lib/
+        ldconfig
+        
+        # Add library path to LD_LIBRARY_PATH in system profile
+        if ! grep -q "LD_LIBRARY_PATH.*common/gpu" /etc/profile; then
+          echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib" >> /etc/profile
+        fi
+        
+        # Add to current session
+        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib
+        
+        log_success "CUDA library linked and installed for runtime loading: ${CURRENT_DIR}/common/gpu"
       fi
       
-      # Add to current session
-      export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib
-      
-      log_success "CUDA library linked and installed for runtime loading: ${CURRENT_DIR}/common/gpu"
+      # Build geth with CUDA support
+      log_wait "Building geth with CUDA acceleration"
+      if make -f Makefile.cuda geth-cuda; then
+        log_success "Geth with CUDA acceleration built successfully"
+      else
+        log_wait "CUDA build failed, falling back to standard build"
+        make all
+      fi
+    else
+      log_wait "CUDA compilation failed, building CPU-only version"
+      make all
     fi
   else
     log_wait "CUDA not available - building CPU-only version"
+    make all
   fi
   
-  # Build the main application
-  make all
   log_success "Backend build completed"
 }
 
