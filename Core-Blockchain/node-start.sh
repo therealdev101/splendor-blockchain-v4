@@ -52,9 +52,9 @@ source ~/.bashrc
 # Set up CUDA environment by default if GPU is enabled
 if [ "$ENABLE_GPU" = "true" ]; then
   export CUDA_PATH=/usr/local/cuda
-  export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+  export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/lib:$(pwd)/node_src/common/gpu:$LD_LIBRARY_PATH
   export PATH=/usr/local/cuda/bin:$PATH
-  echo -e "${GREEN}🚀 CUDA environment activated${NC}"
+  echo -e "${GREEN}🚀 CUDA environment activated with custom GPU libraries${NC}"
 fi
 #########################################################################
 
@@ -125,7 +125,7 @@ startRpc(){
         # Pass GPU environment to tmux session
         if [ "$ENABLE_GPU" = "true" ]; then
           tmux send-keys -t node$node_num "export CUDA_PATH=/usr/local/cuda" Enter
-          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" Enter
+          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/lib:$(pwd)/node_src/common/gpu:\$LD_LIBRARY_PATH" Enter
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
@@ -156,7 +156,7 @@ startValidator(){
         # Pass GPU environment to tmux session
         if [ "$ENABLE_GPU" = "true" ]; then
           tmux send-keys -t node$node_num "export CUDA_PATH=/usr/local/cuda" Enter
-          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" Enter
+          tmux send-keys -t node$node_num "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/lib:$(pwd)/node_src/common/gpu:\$LD_LIBRARY_PATH" Enter
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi

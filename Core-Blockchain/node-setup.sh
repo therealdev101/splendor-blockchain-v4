@@ -168,7 +168,21 @@ task6(){
       # Add CUDA library path to gpu_processor.go with absolute path
       CURRENT_DIR=$(pwd)
       sed -i "/#cgo LDFLAGS: -lOpenCL/c\\#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lcuda_kernels -lcudart -L/usr/local/cuda/lib64" common/gpu/gpu_processor.go
-      log_success "CUDA library linked successfully with absolute path: ${CURRENT_DIR}/common/gpu"
+      
+      # Copy CUDA library to system library path for runtime loading
+      log_wait "Installing CUDA library to system path for runtime loading"
+      cp common/gpu/libcuda_kernels.so /usr/local/lib/
+      ldconfig
+      
+      # Add library path to LD_LIBRARY_PATH in system profile
+      if ! grep -q "LD_LIBRARY_PATH.*common/gpu" /etc/profile; then
+        echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib" >> /etc/profile
+      fi
+      
+      # Add to current session
+      export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib
+      
+      log_success "CUDA library linked and installed for runtime loading: ${CURRENT_DIR}/common/gpu"
     fi
   else
     log_wait "CUDA not available - building CPU-only version"
