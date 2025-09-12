@@ -144,3 +144,7 @@ splendor-rpc.org
 # CUDA wallet testing (contains private keys and test data)
 cuda-wallet-test/
 GPU_PARALLEL_PROCESSING_ANALYSIS_AND_IMPROVEMENTS.md
+
+# CUDA compiled files
+*.o
+*.a

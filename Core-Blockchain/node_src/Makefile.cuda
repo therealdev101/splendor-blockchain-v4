@@ -14,6 +14,7 @@ CGO_LDFLAGS = -L$(CUDA_PATH)/lib64 -lcuda -lcudart -lOpenCL
 # CUDA source files
 CUDA_SOURCES = common/gpu/cuda_kernels.cu
 CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
+LIBCUDA = common/gpu/libsplendor_cuda.a
 
 # Default target
 .PHONY: all
@@ -23,13 +24,18 @@ all: cuda-objects geth
 .PHONY: cuda-objects
 cuda-objects: $(CUDA_OBJECTS)
 
+# Archive CUDA objects into a static library to avoid duplicate symbol linkage
+.PHONY: cuda-lib
+cuda-lib: $(CUDA_OBJECTS)
+	ar rcs $(LIBCUDA) $(CUDA_OBJECTS)
+
 %.o: %.cu
 	$(NVCC) $(CUDA_FLAGS) -c $< -o $@
 
 # Build geth with CUDA support
 .PHONY: geth-cuda
-geth-cuda: cuda-objects
-	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS) $(CUDA_OBJECTS)" go build -o build/bin/geth ./cmd/geth
+geth-cuda: cuda-lib
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS) -Lcommon/gpu -lsplendor_cuda" go build -o build/bin/geth ./cmd/geth
 
 # Build all tools with CUDA support
 .PHONY: all-cuda
@@ -44,7 +50,7 @@ test-cuda: cuda-objects
 # Clean CUDA objects
 .PHONY: clean-cuda
 clean-cuda:
-	rm -f $(CUDA_OBJECTS)
+	rm -f $(CUDA_OBJECTS) $(LIBCUDA)
 
 # Clean all
 .PHONY: clean

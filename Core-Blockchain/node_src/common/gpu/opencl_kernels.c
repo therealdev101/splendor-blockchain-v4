@@ -356,8 +356,29 @@ int verifySignaturesOpenCL(void* signatures, int count, void* results) {
     cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, count, NULL, &err);
     CL_CHECK(err);
     
-    // Copy input data
-    CL_CHECK(clEnqueueWriteBuffer(queues[0], sig_buffer, CL_TRUE, 0, sig_size, signatures, 0, NULL, NULL));
+    // Copy input data (signatures + messages + pubkeys may be packed in a single buffer)
+    // If 'signatures' points to a packed layout [65 | 32 | 64] * count, deinterleave into separate buffers.
+    uint8_t* packed = (uint8_t*)signatures;
+    uint8_t* host_sigs = (uint8_t*)malloc(sig_size);
+    uint8_t* host_msgs = (uint8_t*)malloc(msg_size);
+    uint8_t* host_keys = (uint8_t*)malloc(key_size);
+    if (host_sigs == NULL || host_msgs == NULL || host_keys == NULL) {
+        if (host_sigs) free(host_sigs);
+        if (host_msgs) free(host_msgs);
+        if (host_keys) free(host_keys);
+        return -1;
+    }
+
+    size_t stride = 65 + 32 + 64;
+    for (int i = 0; i < count; i++) {
+        memcpy(host_sigs + i * 65, packed + i * stride, 65);
+        memcpy(host_msgs + i * 32, packed + i * stride + 65, 32);
+        memcpy(host_keys + i * 64, packed + i * stride + 65 + 32, 64);
+    }
+
+    CL_CHECK(clEnqueueWriteBuffer(queues[0], sig_buffer, CL_TRUE, 0, sig_size, host_sigs, 0, NULL, NULL));
+    CL_CHECK(clEnqueueWriteBuffer(queues[0], msg_buffer, CL_TRUE, 0, msg_size, host_msgs, 0, NULL, NULL));
+    CL_CHECK(clEnqueueWriteBuffer(queues[0], key_buffer, CL_TRUE, 0, key_size, host_keys, 0, NULL, NULL));
     
     // Set kernel arguments
     CL_CHECK(clSetKernelArg(ecdsa_kernel, 0, sizeof(cl_mem), &sig_buffer));
@@ -383,6 +404,11 @@ int verifySignaturesOpenCL(void* signatures, int count, void* results) {
     clReleaseMemObject(msg_buffer);
     clReleaseMemObject(key_buffer);
     clReleaseMemObject(result_buffer);
+
+    // Free host-side temporary buffers
+    free(host_sigs);
+    free(host_msgs);
+    free(host_keys);
     
     return 0;
 }

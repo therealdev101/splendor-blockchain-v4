@@ -140,6 +140,11 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Version:   "1.0",
 			Service:   NewPrivateAccountAPI(apiBackend, nonceLock),
 			Public:    false,
+		}, {
+			Namespace: "gpu",
+			Version:   "1.0",
+			Service:   NewGPUAccelerationAPI(apiBackend),
+			Public:    true,
 		},
 	}
 }
