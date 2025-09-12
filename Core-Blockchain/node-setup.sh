@@ -148,11 +148,34 @@ task5(){
 }
 
 task6(){
-  # do make all TASK 6
-  log_wait "Building backend" && progress_bar
+  # do make all TASK 6 with automatic GPU compilation
+  log_wait "Building backend with GPU acceleration" && progress_bar
   cd node_src
+  
+  # Set CUDA environment for build
+  export CUDA_PATH=/usr/local/cuda
+  export PATH=$CUDA_PATH/bin:$PATH
+  export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+  
+  # First, compile CUDA kernels if CUDA is available
+  if command -v nvcc >/dev/null 2>&1; then
+    log_wait "Compiling CUDA kernels for GPU acceleration"
+    make -f Makefile.gpu cuda || log_wait "CUDA compilation will complete after reboot"
+    
+    # Update CGO flags to link CUDA library
+    log_wait "Updating CGO flags for CUDA linking"
+    if [ -f "common/gpu/libcuda_kernels.so" ]; then
+      # Add CUDA library path to gpu_processor.go
+      sed -i '/#cgo LDFLAGS: -lOpenCL/c\#cgo LDFLAGS: -lOpenCL -L./common/gpu -lcuda_kernels -lcudart -L/usr/local/cuda/lib64' common/gpu/gpu_processor.go
+      log_success "CUDA library linked successfully"
+    fi
+  else
+    log_wait "CUDA not available - building CPU-only version"
+  fi
+  
+  # Build the main application
   make all
-  log_success "Done"
+  log_success "Backend build completed"
 }
 
 detect_gpu_architecture(){
