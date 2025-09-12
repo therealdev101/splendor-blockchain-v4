@@ -1,3 +1,4 @@
+#define CL_TARGET_OPENCL_VERSION 120
 #include <CL/cl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -241,7 +242,12 @@ int initOpenCL() {
     // Create command queues
     queues = malloc(device_count * sizeof(cl_command_queue));
     for (int i = 0; i < device_count; i++) {
+#ifdef CL_VERSION_2_0
+        cl_queue_properties properties[] = {0};
+        queues[i] = clCreateCommandQueueWithProperties(context, devices[i], properties, &err);
+#else
         queues[i] = clCreateCommandQueue(context, devices[i], 0, &err);
+#endif
         CL_CHECK(err);
     }
     
