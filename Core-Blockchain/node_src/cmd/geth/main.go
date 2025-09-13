@@ -531,9 +531,22 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 
 	// Initialize AI load balancer if enabled
 	if getEnvBool("ENABLE_AI_LOAD_BALANCING", true) {
+		// Get AI configuration with proper defaults
+		llmEndpoint := strings.TrimSpace(os.Getenv("LLM_ENDPOINT"))
+		llmModel := strings.TrimSpace(os.Getenv("LLM_MODEL"))
+		
+		// Use default configuration if environment variables are empty
+		defaultConfig := ai.DefaultAIConfig()
+		if llmEndpoint == "" {
+			llmEndpoint = defaultConfig.LLMEndpoint
+		}
+		if llmModel == "" {
+			llmModel = defaultConfig.LLMModel
+		}
+		
 		aiConfig := &ai.AIConfig{
-			LLMEndpoint:         strings.TrimSpace(os.Getenv("LLM_ENDPOINT")),
-			LLMModel:            strings.TrimSpace(os.Getenv("LLM_MODEL")),
+			LLMEndpoint:         llmEndpoint,
+			LLMModel:            llmModel,
 			LLMTimeout:          getEnvDurationSeconds("LLM_TIMEOUT_SECONDS", 2*time.Second),
 			UpdateInterval:      getEnvDurationMS("AI_UPDATE_INTERVAL_MS", 500*time.Millisecond),
 			HistorySize:         getEnvInt("AI_HISTORY_SIZE", 100),
