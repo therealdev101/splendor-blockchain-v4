@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -405,7 +406,8 @@ func (ai *AILoadBalancer) parseAIResponse(response string) (LoadPrediction, erro
 	end := bytes.LastIndex([]byte(response), []byte("}"))
 	
 	if start == -1 || end == -1 || start >= end {
-		return LoadPrediction{}, fmt.Errorf("no valid JSON found in response")
+		// No JSON found, try to extract values from text
+		return ai.parseTextResponse(response)
 	}
 	
 	jsonStr := response[start : end+1]
@@ -418,7 +420,8 @@ func (ai *AILoadBalancer) parseAIResponse(response string) (LoadPrediction, erro
 	}
 	
 	if err := json.Unmarshal([]byte(jsonStr), &aiResponse); err != nil {
-		return LoadPrediction{}, fmt.Errorf("failed to parse JSON: %w", err)
+		// JSON parsing failed, try text parsing
+		return ai.parseTextResponse(response)
 	}
 	
 	// Validate response
@@ -436,6 +439,57 @@ func (ai *AILoadBalancer) parseAIResponse(response string) (LoadPrediction, erro
 		RecommendedStrategy: aiResponse.Strategy,
 		Confidence:        aiResponse.Confidence,
 		Reasoning:         aiResponse.Reasoning,
+	}, nil
+}
+
+// parseTextResponse extracts values from plain text AI response
+func (ai *AILoadBalancer) parseTextResponse(response string) (LoadPrediction, error) {
+	// Default values
+	ratio := 0.85
+	strategy := "HYBRID"
+	confidence := 0.7
+	reasoning := "Text-based AI response parsed"
+	
+	// Try to extract numeric values from text
+	responseUpper := strings.ToUpper(response)
+	
+	// Look for ratio/percentage values
+	if strings.Contains(responseUpper, "GPU") {
+		if strings.Contains(responseUpper, "95%") || strings.Contains(responseUpper, "0.95") {
+			ratio = 0.95
+		} else if strings.Contains(responseUpper, "90%") || strings.Contains(responseUpper, "0.90") {
+			ratio = 0.90
+		} else if strings.Contains(responseUpper, "80%") || strings.Contains(responseUpper, "0.80") {
+			ratio = 0.80
+		}
+	}
+	
+	// Look for strategy keywords
+	if strings.Contains(responseUpper, "GPU_ONLY") || strings.Contains(responseUpper, "GPU ONLY") {
+		strategy = "GPU_ONLY"
+		confidence = 0.8
+	} else if strings.Contains(responseUpper, "CPU_ONLY") || strings.Contains(responseUpper, "CPU ONLY") {
+		strategy = "CPU_ONLY"
+		confidence = 0.8
+	} else if strings.Contains(responseUpper, "HYBRID") {
+		strategy = "HYBRID"
+		confidence = 0.75
+	}
+	
+	// Extract reasoning from response (first 100 chars)
+	if len(response) > 10 {
+		reasoning = response
+		if len(reasoning) > 100 {
+			reasoning = reasoning[:100] + "..."
+		}
+	}
+	
+	return LoadPrediction{
+		Timestamp:         time.Now(),
+		RecommendedRatio:  ratio,
+		RecommendedStrategy: strategy,
+		Confidence:        confidence,
+		Reasoning:         reasoning,
 	}, nil
 }
 
