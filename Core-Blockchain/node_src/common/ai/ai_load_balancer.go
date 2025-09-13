@@ -51,11 +51,11 @@ type AIConfig struct {
 	ConfidenceThreshold float64    `json:"confidenceThreshold"`
 }
 
-// DefaultAIConfig returns default AI configuration for Phi-3 Mini with vLLM
+// DefaultAIConfig returns default AI configuration for TinyLlama with vLLM
 func DefaultAIConfig() *AIConfig {
 	return &AIConfig{
-		LLMEndpoint:         "http://localhost:8000/v1/completions", // vLLM OpenAI-compatible API
-		LLMModel:           "microsoft/Phi-3-mini-4k-instruct", // Phi-3 Mini 3.8B parameter model
+		LLMEndpoint:         "http://localhost:8000/v1/chat/completions", // vLLM OpenAI-compatible API
+		LLMModel:           "TinyLlama/TinyLlama-1.1B-Chat-v1.0", // TinyLlama 1.1B parameter model
 		LLMTimeout:         1 * time.Second, // 2x faster for high TPS optimization
 		UpdateInterval:     250 * time.Millisecond, // 2x more frequent updates for massive TPS
 		HistorySize:        200, // 2x larger history for better pattern recognition
@@ -98,19 +98,27 @@ type AIDecision struct {
 	PerformanceGain float64    `json:"performanceGain"`
 }
 
-// VLLMRequest represents a request to vLLM (OpenAI-compatible)
-type VLLMRequest struct {
-	Model       string  `json:"model"`
-	Prompt      string  `json:"prompt"`
-	MaxTokens   int     `json:"max_tokens"`
-	Temperature float64 `json:"temperature"`
-	Stream      bool    `json:"stream"`
+// VLLMChatRequest represents a chat request to vLLM (OpenAI-compatible)
+type VLLMChatRequest struct {
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	MaxTokens   int       `json:"max_tokens"`
+	Temperature float64   `json:"temperature"`
+	Stream      bool      `json:"stream"`
 }
 
-// VLLMResponse represents a response from vLLM
-type VLLMResponse struct {
+// Message represents a chat message
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// VLLMChatResponse represents a response from vLLM chat API
+type VLLMChatResponse struct {
 	Choices []struct {
-		Text string `json:"text"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
 	} `json:"choices"`
 }
 
@@ -162,16 +170,21 @@ func (ai *AILoadBalancer) testLLMConnection() error {
 	return nil
 }
 
-// queryLLM sends a query to vLLM using OpenAI-compatible API
+// queryLLM sends a query to vLLM using OpenAI-compatible chat API
 func (ai *AILoadBalancer) queryLLM(prompt string) (string, error) {
 	// Validate LLM endpoint before making request
 	if ai.llmEndpoint == "" || ai.llmEndpoint == "\\" || ai.llmEndpoint == "\"\"" {
 		return "", fmt.Errorf("LLM endpoint not configured or empty")
 	}
 	
-	request := VLLMRequest{
-		Model:       ai.llmModel,
-		Prompt:      prompt,
+	request := VLLMChatRequest{
+		Model: ai.llmModel,
+		Messages: []Message{
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
 		MaxTokens:   200,
 		Temperature: 0.1,
 		Stream:      false,
@@ -204,16 +217,23 @@ func (ai *AILoadBalancer) queryLLM(prompt string) (string, error) {
 		return "", err
 	}
 	
-	var vllmResp VLLMResponse
+	var vllmResp VLLMChatResponse
 	if err := json.Unmarshal(body, &vllmResp); err != nil {
 		return "", err
 	}
 	
 	if len(vllmResp.Choices) == 0 {
-		return "", fmt.Errorf("no response choices from vLLM")
+		// Not an error - model may have nothing to say, use fallback
+		return "", nil
 	}
 	
-	return vllmResp.Choices[0].Text, nil
+	content := vllmResp.Choices[0].Message.Content
+	if content == "" {
+		// Empty response is also fine, use fallback
+		return "", nil
+	}
+	
+	return content, nil
 }
 
 // aiDecisionLoop runs the AI decision making process
@@ -253,6 +273,13 @@ func (ai *AILoadBalancer) makeAIDecision() {
 	response, err := ai.queryLLM(prompt)
 	if err != nil {
 		log.Warn("AI decision failed, using fallback", "error", err)
+		ai.fallbackDecision(metrics)
+		return
+	}
+	
+	// If response is empty, use fallback (not an error)
+	if response == "" {
+		log.Debug("AI returned empty response, using fallback")
 		ai.fallbackDecision(metrics)
 		return
 	}
