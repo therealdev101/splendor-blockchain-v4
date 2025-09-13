@@ -140,14 +140,14 @@ test_vllm_api() {
     
     # Test the model
     echo -e "${CYAN}Testing Phi-3 Mini model via vLLM...${NC}"
-    test_response=$(curl -s -X POST http://localhost:8000/v1/completions \
+    test_response=$(curl -s -X POST http://localhost:8000/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d '{
-            "model": "microsoft/Phi-3-mini-4k-instruct",
-            "prompt": "Respond with AI Ready if you can help with blockchain load balancing.",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "messages": [{"role": "user", "content": "Respond with AI Ready if you can help with blockchain load balancing."}],
             "max_tokens": 50,
             "temperature": 0.1
-        }' | jq -r '.choices[0].text' 2>/dev/null)
+        }' | jq -r '.choices[0].message.content' 2>/dev/null)
     
     if [[ "$test_response" == *"AI Ready"* ]] || [[ "$test_response" == *"ready"* ]] || [[ "$test_response" == *"Ready"* ]]; then
         echo -e "${GREEN}✅ Phi-3 Mini model is working correctly with vLLM${NC}"
@@ -266,8 +266,8 @@ update_env_with_ai() {
 
 # AI-Powered Load Balancing Configuration (vLLM + Phi-3 Mini 3.8B)
 ENABLE_AI_LOAD_BALANCING=true
-LLM_ENDPOINT=http://localhost:8000/v1/completions
-LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
+LLM_ENDPOINT=http://localhost:8000/v1/chat/completions
+LLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0
 LLM_TIMEOUT_SECONDS=2
 AI_UPDATE_INTERVAL_MS=500
 AI_HISTORY_SIZE=100
@@ -310,9 +310,9 @@ fi
 
 # Verify vLLM is running
 if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
-    echo -e "${GREEN}✅ vLLM Phi-3 Mini service is running${NC}"
+    echo -e "${GREEN}✅ vLLM TinyLlama service is running${NC}"
     echo -e "${CYAN}   API Endpoint: http://localhost:8000${NC}"
-    echo -e "${CYAN}   Model: microsoft/Phi-3-mini-4k-instruct${NC}"
+    echo -e "${CYAN}   Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0${NC}"
 else
     echo -e "${RED}❌ vLLM service failed to start${NC}"
     echo -e "${ORANGE}AI load balancing will be disabled${NC}"
@@ -490,14 +490,14 @@ test_ai_integration() {
     # Test Phi-3 Mini model with blockchain query
     test_prompt="You are a blockchain load balancer. Current TPS: 100000, CPU: 80%, GPU: 60%. Recommend GPU ratio (0-1) in JSON format."
     
-    response=$(curl -s -X POST http://localhost:8000/v1/completions \
+    response=$(curl -s -X POST http://localhost:8000/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d "{
-            \"model\": \"microsoft/Phi-3-mini-4k-instruct\",
-            \"prompt\": \"$test_prompt\",
+            \"model\": \"TinyLlama/TinyLlama-1.1B-Chat-v1.0\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"$test_prompt\"}],
             \"max_tokens\": 100,
             \"temperature\": 0.1
-        }" | jq -r '.choices[0].text' 2>/dev/null)
+        }" | jq -r '.choices[0].message.content' 2>/dev/null)
     
     if [[ "$response" == *"ratio"* ]] || [[ "$response" == *"0."* ]]; then
         echo -e "${GREEN}✅ vLLM Phi-3 Mini responding correctly to blockchain queries${NC}"

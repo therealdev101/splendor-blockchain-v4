@@ -855,7 +855,7 @@ install_ai_llm(){
   log_wait "Setting up vLLM as system service with optimized GPU memory allocation"
   cat > /etc/systemd/system/vllm-phi3.service << EOF
 [Unit]
-Description=vLLM Phi-3 Mini Service for Blockchain AI
+Description=vLLM TinyLlama Service for Blockchain AI
 After=network.target
 
 [Service]
@@ -864,8 +864,8 @@ User=root
 WorkingDirectory=/opt/vllm-env
 Environment=CUDA_VISIBLE_DEVICES=0
 Environment=VLLM_USE_MODELSCOPE=False
-Environment=CUDA_MEMORY_FRACTION=0.4
-ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model microsoft/Phi-3-mini-4k-instruct --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.4 --max-model-len 4096 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
+Environment=CUDA_MEMORY_FRACTION=0.15
+ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.15 --max-model-len 2048 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -883,10 +883,10 @@ EOF
   log_wait "Configuring AI load balancing settings"
   cat >> ./.env << EOF
 
-# AI-Powered Load Balancing Configuration (vLLM + Phi-3 Mini 3.8B)
+# AI-Powered Load Balancing Configuration (vLLM + TinyLlama 1.1B)
 ENABLE_AI_LOAD_BALANCING=true
-LLM_ENDPOINT=http://localhost:8000/v1/completions
-LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
+LLM_ENDPOINT=http://localhost:8000/v1/chat/completions
+LLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0
 LLM_TIMEOUT_SECONDS=2
 AI_UPDATE_INTERVAL_MS=500
 AI_HISTORY_SIZE=100
@@ -895,8 +895,8 @@ AI_CONFIDENCE_THRESHOLD=0.75
 AI_ENABLE_LEARNING=true
 AI_ENABLE_PREDICTIONS=true
 AI_FAST_MODE=true
-VLLM_GPU_MEMORY_UTILIZATION=0.4
-VLLM_MAX_MODEL_LEN=4096
+VLLM_GPU_MEMORY_UTILIZATION=0.15
+VLLM_MAX_MODEL_LEN=2048
 EOF
 
   # Create AI monitoring scripts
