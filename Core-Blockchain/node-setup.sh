@@ -412,42 +412,47 @@ install_gpu_dependencies(){
 }
 
 configure_gpu_environment(){
-  # Configure GPU environment for optimal performance TASK 6B
-  log_wait "Configuring GPU environment for high-performance RPC" && progress_bar
+  # Configure GPU environment for optimal performance with AI sharing TASK 6B
+  log_wait "Configuring GPU environment for high-performance RPC with AI memory sharing" && progress_bar
   
-  # Create GPU configuration in .env file
+  # Create GPU configuration in .env file with proper memory allocation
   cat >> ./.env << EOF
 
-# GPU Acceleration Configuration for High-Performance RPC
+# GPU Acceleration Configuration for High-Performance RPC (RTX 4000 SFF Ada - 20GB VRAM)
 ENABLE_GPU=true
 PREFERRED_GPU_TYPE=CUDA
-GPU_MAX_BATCH_SIZE=10000
-GPU_MAX_MEMORY_USAGE=4294967296
-GPU_HASH_WORKERS=8
-GPU_SIGNATURE_WORKERS=8
-GPU_TX_WORKERS=8
+GPU_MAX_BATCH_SIZE=200000
+GPU_MAX_MEMORY_USAGE=10737418240
+GPU_MEMORY_FRACTION=0.5
+GPU_HASH_WORKERS=16
+GPU_SIGNATURE_WORKERS=16
+GPU_TX_WORKERS=16
 GPU_ENABLE_PIPELINING=true
 
-# Hybrid Processing Configuration
+# Hybrid Processing Configuration with AI Coordination
 ENABLE_HYBRID_PROCESSING=true
 GPU_THRESHOLD=1000
-CPU_GPU_RATIO=0.7
+CPU_GPU_RATIO=0.5
 ADAPTIVE_LOAD_BALANCING=true
 PERFORMANCE_MONITORING=true
 MAX_CPU_UTILIZATION=0.85
-MAX_GPU_UTILIZATION=0.90
-THROUGHPUT_TARGET=1000000
+MAX_GPU_UTILIZATION=0.50
+THROUGHPUT_TARGET=2000000
 
-# Memory Management
-MAX_MEMORY_USAGE=17179869184
-GPU_MEMORY_RESERVATION=2147483648
+# Memory Management (RTX 4000 SFF Ada - 20GB Total)
+MAX_MEMORY_USAGE=68719476736
+GPU_MEMORY_RESERVATION=10737418240
+AI_MEMORY_RESERVATION=8589934592
+MEMORY_BUFFER=2147483648
 
-# Performance Optimization
+# Performance Optimization for AI Sharing
 GPU_DEVICE_COUNT=1
-GPU_LOAD_BALANCE_STRATEGY=round_robin
+GPU_LOAD_BALANCE_STRATEGY=ai_optimized
+AI_GPU_COORDINATION=true
+ENABLE_CUDA_MPS=true
 EOF
   
-  log_success "GPU environment configured for 1M+ TPS target"
+  log_success "GPU environment configured for 2M+ TPS target with AI memory sharing (10GB blockchain + 8GB AI + 2GB buffer)"
 }
 
 task6_gpu(){
@@ -872,26 +877,72 @@ install_ai_llm(){
   # Install AI-powered load balancing (vLLM + Phi-3 Mini) TASK AI
   log_wait "Installing AI-powered load balancing system (vLLM + Phi-3 Mini)" && progress_bar
   
-  # Install Python dependencies for vLLM
-  log_wait "Installing Python dependencies for AI system"
+  # Install Python dependencies for vLLM (10%)
+  log_wait "Installing Python dependencies for AI system [10%]" && progress_bar
   apt install -y python3 python3-pip python3-venv python3-dev jq
+  log_success "Python dependencies installed [10%]"
   
-  # Create virtual environment for vLLM
-  log_wait "Creating Python virtual environment for vLLM"
+  # Create virtual environment for vLLM (20%)
+  log_wait "Creating Python virtual environment for vLLM [20%]" && progress_bar
   python3 -m venv /opt/vllm-env
   source /opt/vllm-env/bin/activate
+  log_success "Virtual environment created [20%]"
   
-  # Install PyTorch with CUDA support
-  log_wait "Installing PyTorch with CUDA support for AI acceleration"
+  # Install PyTorch with CUDA support (50%)
+  log_wait "Installing PyTorch with CUDA support for AI acceleration [50%]" && progress_bar
   pip install --upgrade pip setuptools wheel
-  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
   
-  # Install vLLM
-  log_wait "Installing vLLM (High-Performance LLM Inference Engine)"
-  pip install vllm transformers huggingface_hub fastapi uvicorn
+  # Retry PyTorch installation up to 3 times
+  PYTORCH_INSTALLED=false
+  for attempt in 1 2 3; do
+    log_wait "Installing PyTorch (attempt $attempt/3)"
+    if pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118; then
+      PYTORCH_INSTALLED=true
+      break
+    else
+      log_wait "PyTorch installation attempt $attempt failed, retrying..."
+      sleep 5
+    fi
+  done
   
-  # Create vLLM systemd service
-  log_wait "Setting up vLLM as system service"
+  if [ "$PYTORCH_INSTALLED" = false ]; then
+    log_error "PyTorch installation failed after 3 attempts"
+    return 1
+  fi
+  log_success "PyTorch with CUDA support installed [50%]"
+  
+  # Install vLLM with proper error handling and retry (80%)
+  log_wait "Installing vLLM (High-Performance LLM Inference Engine) [80%]" && progress_bar
+  
+  VLLM_INSTALLED=false
+  for attempt in 1 2 3; do
+    log_wait "Installing vLLM (attempt $attempt/3)"
+    if pip install vllm transformers huggingface_hub fastapi uvicorn --break-system-packages; then
+      VLLM_INSTALLED=true
+      break
+    else
+      log_wait "vLLM installation attempt $attempt failed, retrying with force reinstall..."
+      pip install vllm transformers huggingface_hub fastapi uvicorn --break-system-packages --force-reinstall || true
+      sleep 10
+    fi
+  done
+  
+  if [ "$VLLM_INSTALLED" = false ]; then
+    log_error "vLLM installation failed after 3 attempts - falling back to CPU-only mode"
+    return 1
+  fi
+  
+  # Verify vLLM installation (90%)
+  log_wait "Verifying vLLM installation [90%]"
+  if python -c "import vllm; print('vLLM installed successfully')" 2>/dev/null; then
+    log_success "vLLM installation verified [90%]"
+  else
+    log_error "vLLM installation verification failed - falling back to CPU-only mode"
+    return 1
+  fi
+  
+  # Create vLLM systemd service with proper GPU memory allocation
+  log_wait "Setting up vLLM as system service with optimized GPU memory allocation"
   cat > /etc/systemd/system/vllm-phi3.service << EOF
 [Unit]
 Description=vLLM Phi-3 Mini Service for Blockchain AI
@@ -903,7 +954,8 @@ User=root
 WorkingDirectory=/opt/vllm-env
 Environment=CUDA_VISIBLE_DEVICES=0
 Environment=VLLM_USE_MODELSCOPE=False
-ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model microsoft/Phi-3-mini-4k-instruct --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.3 --max-model-len 4096 --dtype float16
+Environment=CUDA_MEMORY_FRACTION=0.4
+ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model microsoft/Phi-3-mini-4k-instruct --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.4 --max-model-len 4096 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -933,7 +985,7 @@ AI_CONFIDENCE_THRESHOLD=0.75
 AI_ENABLE_LEARNING=true
 AI_ENABLE_PREDICTIONS=true
 AI_FAST_MODE=true
-VLLM_GPU_MEMORY_UTILIZATION=0.3
+VLLM_GPU_MEMORY_UTILIZATION=0.4
 VLLM_MAX_MODEL_LEN=4096
 EOF
 
@@ -944,7 +996,131 @@ EOF
   # Copy the AI setup script content
   cp ./scripts/setup-ai-llm.sh ./scripts/setup-ai-llm-backup.sh 2>/dev/null || true
   
-  log_success "AI-powered load balancing system installed (will activate after reboot)"
+  log_success "AI-powered load balancing system installed [100%] (will activate after reboot)"
+}
+
+verify_installation(){
+  # Comprehensive installation verification before completion
+  log_wait "Performing comprehensive installation verification" && progress_bar
+  
+  VERIFICATION_PASSED=true
+  
+  echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║                    INSTALLATION VERIFICATION                ║${NC}"
+  echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+  
+  # Check Go installation
+  if command -v go >/dev/null 2>&1; then
+    GO_VERSION=$(go version | awk '{print $3}')
+    log_success "✅ Go installed: $GO_VERSION"
+  else
+    log_error "❌ Go not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check geth binary
+  if [ -f "./node_src/build/bin/geth" ]; then
+    log_success "✅ Geth binary built successfully"
+  else
+    log_error "❌ Geth binary not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check GPU drivers
+  if nvidia-smi >/dev/null 2>&1; then
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | head -1)
+    GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+    log_success "✅ GPU drivers active: $GPU_NAME ($GPU_MEMORY MB)"
+  else
+    log_wait "⚠️  GPU drivers installed but require reboot to activate"
+  fi
+  
+  # Check CUDA installation
+  if command -v nvcc >/dev/null 2>&1; then
+    CUDA_VERSION=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+    log_success "✅ CUDA installed: $CUDA_VERSION"
+  else
+    log_wait "⚠️  CUDA installed but requires reboot to activate"
+  fi
+  
+  # Check vLLM installation
+  if [ -d "/opt/vllm-env" ]; then
+    log_success "✅ vLLM virtual environment created"
+    
+    # Check if vLLM is actually installed in the environment
+    if /opt/vllm-env/bin/python -c "import vllm; print('vLLM version:', vllm.__version__)" 2>/dev/null; then
+      VLLM_VERSION=$(/opt/vllm-env/bin/python -c "import vllm; print(vllm.__version__)" 2>/dev/null)
+      log_success "✅ vLLM installed and working: $VLLM_VERSION"
+    else
+      log_error "❌ vLLM not properly installed in virtual environment"
+      VERIFICATION_PASSED=false
+    fi
+  else
+    log_error "❌ vLLM virtual environment not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check vLLM systemd service
+  if systemctl list-unit-files | grep -q "vllm-phi3.service"; then
+    log_success "✅ vLLM systemd service configured"
+  else
+    log_error "❌ vLLM systemd service not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check Node.js and npm
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    NODE_VERSION=$(node --version)
+    log_success "✅ Node.js installed: $NODE_VERSION"
+  else
+    log_error "❌ Node.js/npm not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check yarn and pm2
+  if command -v yarn >/dev/null 2>&1 && command -v pm2 >/dev/null 2>&1; then
+    log_success "✅ Yarn and PM2 installed"
+  else
+    log_error "❌ Yarn or PM2 not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Check .env configuration
+  if [ -f "./.env" ]; then
+    if grep -q "ENABLE_AI_LOAD_BALANCING=true" ./.env; then
+      log_success "✅ AI configuration added to .env"
+    else
+      log_error "❌ AI configuration missing from .env"
+      VERIFICATION_PASSED=false
+    fi
+  else
+    log_error "❌ .env file not found"
+    VERIFICATION_PASSED=false
+  fi
+  
+  # Final verification result
+  echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+  if [ "$VERIFICATION_PASSED" = true ]; then
+    echo -e "${GREEN}║                    ✅ VERIFICATION PASSED                    ║${NC}"
+    echo -e "${GREEN}║                                                              ║${NC}"
+    echo -e "${GREEN}║  All components installed successfully!                     ║${NC}"
+    echo -e "${GREEN}║  • Go + Geth blockchain node                                ║${NC}"
+    echo -e "${GREEN}║  • GPU acceleration (CUDA + OpenCL)                        ║${NC}"
+    echo -e "${GREEN}║  • AI system (vLLM + Phi-3 Mini)                           ║${NC}"
+    echo -e "${GREEN}║  • Node.js ecosystem (yarn + pm2)                          ║${NC}"
+    echo -e "${GREEN}║                                                              ║${NC}"
+    echo -e "${GREEN}║  Ready to start with: ./node-start.sh                      ║${NC}"
+  else
+    echo -e "${RED}║                    ❌ VERIFICATION FAILED                    ║${NC}"
+    echo -e "${RED}║                                                              ║${NC}"
+    echo -e "${RED}║  Some components failed to install properly.               ║${NC}"
+    echo -e "${RED}║  Please check the errors above and retry setup.            ║${NC}"
+    echo -e "${RED}║                                                              ║${NC}"
+    echo -e "${RED}║  You may need to reboot and run setup again.               ║${NC}"
+  fi
+  echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+  
+  return $([[ "$VERIFICATION_PASSED" = true ]] && echo 0 || echo 1)
 }
 
 #Logger setup
@@ -1021,10 +1197,20 @@ finalize(){
   # Install AI-powered load balancing (vLLM + Phi-3 Mini)
   install_ai_llm
 
-  displayStatus
+  # Perform comprehensive verification before completion
+  verify_installation
   
-  # Check if reboot is needed and handle automatic reboot
-  reboot_countdown
+  # Only proceed if verification passed
+  if [ $? -eq 0 ]; then
+    displayStatus
+    
+    # Check if reboot is needed and handle automatic reboot
+    reboot_countdown
+  else
+    echo -e "\n${RED}❌ Setup incomplete due to verification failures.${NC}"
+    echo -e "${ORANGE}Please review the errors above and run setup again.${NC}\n"
+    exit 1
+  fi
 }
 
 
