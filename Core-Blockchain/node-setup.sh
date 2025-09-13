@@ -565,6 +565,17 @@ extern "C" {
 }
 EOF
   
+  # Fix CUDA linking paths in gpu_processor.go for proper compilation
+  log_wait "Fixing CUDA library linking paths for proper compilation"
+  CURRENT_DIR=$(pwd)
+  
+  # Update CGO LDFLAGS to use absolute path to CUDA library
+  if [ -f "common/gpu/gpu_processor.go" ]; then
+    # Replace the CGO LDFLAGS line with the correct absolute path
+    sed -i "s|#cgo LDFLAGS: -lOpenCL -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64|#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64|g" common/gpu/gpu_processor.go
+    log_success "CUDA linking paths updated for proper compilation"
+  fi
+  
   # Build GPU components using the working Makefile
   if command -v nvcc >/dev/null 2>&1; then
     log_wait "Building CUDA components with GCC 9 compatibility and wrapper headers"
