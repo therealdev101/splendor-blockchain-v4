@@ -15,7 +15,7 @@ import (
 )
 
 /*
-#cgo LDFLAGS: -L${SRCDIR} -lcuda_kernels -lOpenCL -lcudart -Wl,-rpath,${SRCDIR} -Wl,-rpath,/usr/local/cuda/lib64
+#cgo LDFLAGS: -L${SRCDIR} -lcuda_kernels -lOpenCL -L/usr/local/cuda/lib64 -lcudart -Wl,-rpath,${SRCDIR} -Wl,-rpath,/usr/local/cuda/lib64
 
 #include <stdlib.h>
 #include <string.h>
