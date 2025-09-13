@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -553,13 +552,6 @@ func (p *AITransactionPredictor) Close() error {
 	return nil
 }
 
-// Helper function for min
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // Global AI transaction predictor instance
 var globalAITransactionPredictor *AITransactionPredictor
