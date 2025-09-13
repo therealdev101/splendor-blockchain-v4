@@ -164,6 +164,11 @@ func (ai *AILoadBalancer) testLLMConnection() error {
 
 // queryLLM sends a query to vLLM using OpenAI-compatible API
 func (ai *AILoadBalancer) queryLLM(prompt string) (string, error) {
+	// Validate LLM endpoint before making request
+	if ai.llmEndpoint == "" || ai.llmEndpoint == "\\" || ai.llmEndpoint == "\"\"" {
+		return "", fmt.Errorf("LLM endpoint not configured or empty")
+	}
+	
 	request := VLLMRequest{
 		Model:       ai.llmModel,
 		Prompt:      prompt,
