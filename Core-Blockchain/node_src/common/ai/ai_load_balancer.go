@@ -56,11 +56,11 @@ func DefaultAIConfig() *AIConfig {
 	return &AIConfig{
 		LLMEndpoint:         "http://localhost:8000/v1/completions", // vLLM OpenAI-compatible API
 		LLMModel:           "microsoft/Phi-3-mini-4k-instruct", // Phi-3 Mini 3.8B parameter model
-		LLMTimeout:         2 * time.Second, // Ultra-fast response with vLLM
-		UpdateInterval:     500 * time.Millisecond, // Very frequent updates due to vLLM speed
-		HistorySize:        100,
-		LearningRate:       0.15,
-		ConfidenceThreshold: 0.75,
+		LLMTimeout:         1 * time.Second, // 2x faster for high TPS optimization
+		UpdateInterval:     250 * time.Millisecond, // 2x more frequent updates for massive TPS
+		HistorySize:        200, // 2x larger history for better pattern recognition
+		LearningRate:       0.25, // Higher learning rate for rapid adaptation
+		ConfidenceThreshold: 0.65, // Lower threshold for more aggressive optimization
 	}
 }
 
@@ -304,33 +304,45 @@ func (ai *AILoadBalancer) generateAIPrompt(current PerformanceMetrics) string {
 	}
 	ai.mu.RUnlock()
 	
-	prompt := fmt.Sprintf(`You are an AI load balancer for a high-performance blockchain system with RTX 4090 GPU and 16+ CPU cores.
+	prompt := fmt.Sprintf(`You are an AI load balancer for a MASSIVE TPS blockchain system with RTX 4000 SFF Ada (20GB VRAM) and 16+ CPU cores.
+
+SYSTEM OPTIMIZATIONS APPLIED:
+- Transaction Pool: 2.5M capacity (was 6K)
+- Block Time: 50ms minimum (was 1s)
+- GPU Batch Size: 200K (was 50K)
+- GPU Workers: 50 each (was 20)
 
 CURRENT PERFORMANCE:
-- TPS: %d (target: 5,000,000)
-- CPU Utilization: %.2f%% (max: 90%%)
-- GPU Utilization: %.2f%% (max: 95%%)
-- Latency: %.1fms (target: <50ms)
-- Batch Size: %d
+- TPS: %d (NEW TARGET: 2,000,000+ sustained, 10M peak)
+- CPU Utilization: %.2f%% (max: 95%% - pushed higher)
+- GPU Utilization: %.2f%% (max: 98%% - RTX 4000 SFF Ada limits)
+- Latency: %.1fms (target: <25ms - 2x faster)
+- Batch Size: %d (optimal: 100K-200K)
 - Current Strategy: %s
-- Queue Depth: %d
+- Queue Depth: %d (capacity: 2.5M)
 
 RECENT TRENDS (last %d measurements):
 %s
 
-DECISION REQUIRED:
-Based on the current performance and trends, recommend:
-1. CPU/GPU ratio (0.0 = all CPU, 1.0 = all GPU)
-2. Processing strategy (CPU_ONLY, GPU_ONLY, HYBRID)
-3. Confidence level (0.0-1.0)
-4. Brief reasoning
+AI DECISION REQUIRED:
+With massive TPS optimizations in place, aggressively optimize for:
+1. CPU/GPU ratio (0.0 = all CPU, 1.0 = all GPU) - favor GPU heavily
+2. Processing strategy (CPU_ONLY, GPU_ONLY, HYBRID) - prefer GPU/HYBRID
+3. Confidence level (0.0-1.0) - be more aggressive with high confidence
+4. Brief reasoning focused on maximizing TPS
+
+OPTIMIZATION PRIORITIES:
+- Push GPU to 95-98%% utilization (RTX 4000 SFF Ada sweet spot)
+- Keep CPU at 90-95%% to handle overflow
+- Target 500K-2M+ TPS sustained throughput
+- Minimize latency under 25ms
 
 Respond in JSON format:
 {
-  "ratio": 0.85,
-  "strategy": "HYBRID",
-  "confidence": 0.9,
-  "reasoning": "High GPU utilization with good performance, maintain current ratio"
+  "ratio": 0.92,
+  "strategy": "GPU_ONLY",
+  "confidence": 0.95,
+  "reasoning": "GPU underutilized at X%%, can push to 95%% for massive TPS gain"
 }`,
 		current.TotalTPS,
 		current.CPUUtilization*100,
