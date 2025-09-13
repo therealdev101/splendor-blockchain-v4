@@ -123,6 +123,27 @@ stopValidator(){
 }
 
 finalize(){
+  # Stop vLLM AI service first
+  if [ -f "/tmp/vllm.pid" ]; then
+    VLLM_PID=$(cat /tmp/vllm.pid)
+    if kill -0 "$VLLM_PID" 2>/dev/null; then
+      log_wait "Stopping vLLM AI service (PID: $VLLM_PID)"
+      kill "$VLLM_PID" 2>/dev/null || true
+      sleep 2
+      # Force kill if still running
+      if kill -0 "$VLLM_PID" 2>/dev/null; then
+        kill -9 "$VLLM_PID" 2>/dev/null || true
+      fi
+      rm -f /tmp/vllm.pid
+      log_success "vLLM AI service stopped"
+    else
+      rm -f /tmp/vllm.pid
+    fi
+  fi
+  
+  # Stop any other vLLM processes
+  pkill -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+  
   pm2 stop all
   countNodes
   
@@ -143,7 +164,7 @@ finalize(){
   tmux ls || log_error "No active tmux sessions found"
   # tmux ls || echo -e "${RED}No active tmux sessions found.${NC}"
   echo -e "\n${GREEN}+------------------ Active Nodes -------------------+${NC}"
-  log_success "Active Nodes"
+  log_success "All services stopped successfully"
 }
 
 # Default variable values
