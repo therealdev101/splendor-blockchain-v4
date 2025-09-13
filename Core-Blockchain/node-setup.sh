@@ -72,14 +72,14 @@ task3(){
   # getting golang TASK 3
   log_wait "Getting golang" && progress_bar
   mkdir -p ./tmp
-  cd ./tmp && wget "https://go.dev/dl/go1.17.3.linux-amd64.tar.gz"
+  cd ./tmp && wget "https://go.dev/dl/go1.22.6.linux-amd64.tar.gz"
   log_success "Done"
 }
 
 task4(){
   # setting up golang TASK 4
   log_wait "Installing golang and setting up autostart" && progress_bar
-  rm -rf /usr/local/go && tar -C /usr/local -xzf go1.17.3.linux-amd64.tar.gz
+  rm -rf /usr/local/go && tar -C /usr/local -xzf go1.22.6.linux-amd64.tar.gz
 
   LINE='PATH=$PATH:/usr/local/go/bin'
   if grep -Fxq "$LINE" /etc/profile
@@ -131,7 +131,7 @@ fi
   
 
   export PATH=$PATH:/usr/local/go/bin
-  go env -w GO111MODULE=off
+  go env -w GO111MODULE=on
   log_success "Done"
   
 }
@@ -162,44 +162,18 @@ task6(){
     log_wait "Compiling CUDA kernels for GPU acceleration"
     
     # Build CUDA library using the proper Makefile
-    if make -f Makefile.cuda cuda-lib; then
+    if make -f Makefile.gpu cuda; then
       log_success "CUDA library compiled successfully"
-      
-      # Update CGO flags in gpu_processor.go to link the CUDA library
-      log_wait "Updating CGO flags for CUDA linking"
-      CURRENT_DIR=$(pwd)
-      
-      # Update the CGO LDFLAGS to include the CUDA library
-      sed -i "/#cgo LDFLAGS: -lOpenCL/c\\#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64" common/gpu/gpu_processor.go
-      
-      # Copy CUDA library to system library path for runtime loading
-      if [ -f "common/gpu/libsplendor_cuda.a" ]; then
-        log_wait "Installing CUDA library to system path for runtime loading"
-        cp common/gpu/libsplendor_cuda.a /usr/local/lib/
-        ldconfig
-        
-        # Add library path to LD_LIBRARY_PATH in system profile
-        if ! grep -q "LD_LIBRARY_PATH.*common/gpu" /etc/profile; then
-          echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib" >> /etc/profile
-        fi
-        
-        # Add to current session
-        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CURRENT_DIR}/common/gpu:/usr/local/lib
-        
-        log_success "CUDA library linked and installed for runtime loading: ${CURRENT_DIR}/common/gpu"
-      fi
-      
-      # Build geth with CUDA support
-      log_wait "Building geth with CUDA acceleration"
-      if make -f Makefile.cuda geth-cuda; then
-        log_success "Geth with CUDA acceleration built successfully"
+      log_wait "Building geth with GPU support"
+      if make geth; then
+        log_success "Geth built successfully"
       else
-        log_wait "CUDA build failed, falling back to standard build"
-        make all
+        log_wait "GPU build failed, falling back to standard build"
+        go run build/ci.go install ./cmd/geth
       fi
     else
       log_wait "CUDA compilation failed, building CPU-only version"
-      make all
+      go run build/ci.go install ./cmd/geth || make all
     fi
   else
     log_wait "CUDA not available - building CPU-only version"
@@ -421,8 +395,8 @@ configure_gpu_environment(){
 # GPU Acceleration Configuration for High-Performance RPC (RTX 4000 SFF Ada - 20GB VRAM)
 ENABLE_GPU=true
 PREFERRED_GPU_TYPE=CUDA
-GPU_MAX_BATCH_SIZE=200000
-GPU_MAX_MEMORY_USAGE=10737418240
+GPU_MAX_BATCH_SIZE=160000
+GPU_MAX_MEMORY_USAGE=12884901888
 GPU_MEMORY_FRACTION=0.5
 GPU_HASH_WORKERS=16
 GPU_SIGNATURE_WORKERS=16
@@ -432,11 +406,11 @@ GPU_ENABLE_PIPELINING=true
 # Hybrid Processing Configuration with AI Coordination
 ENABLE_HYBRID_PROCESSING=true
 GPU_THRESHOLD=1000
-CPU_GPU_RATIO=0.5
+CPU_GPU_RATIO=0.85
 ADAPTIVE_LOAD_BALANCING=true
 PERFORMANCE_MONITORING=true
 MAX_CPU_UTILIZATION=0.85
-MAX_GPU_UTILIZATION=0.50
+MAX_GPU_UTILIZATION=0.95
 THROUGHPUT_TARGET=2000000
 
 # Memory Management (RTX 4000 SFF Ada - 20GB Total)
@@ -452,7 +426,7 @@ AI_GPU_COORDINATION=true
 ENABLE_CUDA_MPS=true
 EOF
   
-  log_success "GPU environment configured for 2M+ TPS target with AI memory sharing (10GB blockchain + 8GB AI + 2GB buffer)"
+  log_success "GPU environment configured for shared 12GB (blockchain) + 8GB (LLM)"
 }
 
 task6_gpu(){
@@ -489,105 +463,18 @@ task6_gpu(){
   
   cd node_src
   
-  # Install GCC 9 for CUDA compatibility (CRITICAL FIX FOR UBUNTU 24.04)
-  log_wait "Installing GCC 9 for CUDA compatibility"
-  apt install -y gcc-9 g++-9
-  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 --slave /usr/bin/g++ g++ /usr/bin/g++-9
-  
-  # Set environment for build and source CUDA paths
+  # Ensure CUDA env for build
   export CUDA_PATH=/usr/local/cuda
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
-  
-  # Add CUDA environment to .env file for persistent activation
-  log_wait "Adding CUDA environment to .env for automatic activation"
-  if ! grep -q "CUDA_PATH" ./.env; then
-    cat >> ./.env << EOF
 
-# CUDA Environment Configuration (Auto-activated by node-start.sh)
-CUDA_PATH=/usr/local/cuda
-CUDA_VISIBLE_DEVICES=0
-EOF
-  fi
-  
-  # Verify CUDA installation
-  if [ -f "/usr/local/cuda/bin/nvcc" ]; then
-    log_success "CUDA compiler found at /usr/local/cuda/bin/nvcc"
-  else
-    log_wait "CUDA compiler not found - will be available after reboot"
-  fi
-  
-  # Create CUDA wrapper headers to bypass Ubuntu 24.04 system header conflicts
-  log_wait "Creating CUDA compatibility wrapper for Ubuntu 24.04"
-  mkdir -p cuda_compat
-  cat > cuda_compat/cuda_wrapper.h << 'EOF'
-#ifndef CUDA_WRAPPER_H
-#define CUDA_WRAPPER_H
-
-// CUDA compatibility wrapper for Ubuntu 24.04
-#define __STDC_WANT_IEC_60559_TYPES_EXT__ 0
-#define __STDC_WANT_IEC_60559_FUNCS_EXT__ 0
-#define __STDC_WANT_IEC_60559_ATTRIBS_EXT__ 0
-
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-
-// Simple GPU kernel for blockchain acceleration
-__global__ void gpu_hash_kernel(unsigned char* input, unsigned char* output, int size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) {
-        output[idx] = input[idx] ^ 0xAA; // Simple XOR operation
-    }
-}
-
-#endif
-EOF
-  
-  # Create minimal CUDA source file that compiles successfully
-  log_wait "Creating working CUDA kernel source"
-  cat > common/gpu/cuda_kernels.cu << 'EOF'
-#include "../../cuda_compat/cuda_wrapper.h"
-
-extern "C" {
-    void gpu_process_data(unsigned char* input, unsigned char* output, int size) {
-        unsigned char *d_input, *d_output;
-        
-        cudaMalloc(&d_input, size);
-        cudaMalloc(&d_output, size);
-        
-        cudaMemcpy(d_input, input, size, cudaMemcpyHostToDevice);
-        
-        dim3 block(256);
-        dim3 grid((size + block.x - 1) / block.x);
-        
-        gpu_hash_kernel<<<grid, block>>>(d_input, d_output, size);
-        
-        cudaMemcpy(output, d_output, size, cudaMemcpyDeviceToHost);
-        
-        cudaFree(d_input);
-        cudaFree(d_output);
-    }
-}
-EOF
-  
-  # Fix CUDA linking paths in gpu_processor.go for proper compilation
-  log_wait "Fixing CUDA library linking paths for proper compilation"
-  CURRENT_DIR=$(pwd)
-  
-  # Update CGO LDFLAGS to use absolute path to CUDA library
-  if [ -f "common/gpu/gpu_processor.go" ]; then
-    # Replace the CGO LDFLAGS line with the correct absolute path
-    sed -i "s|#cgo LDFLAGS: -lOpenCL -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64|#cgo LDFLAGS: -lOpenCL -L${CURRENT_DIR}/common/gpu -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64|g" common/gpu/gpu_processor.go
-    log_success "CUDA linking paths updated for proper compilation"
-  fi
-  
-  # Build GPU components using the working Makefile
+  # Build GPU components using Makefile.gpu
   if command -v nvcc >/dev/null 2>&1; then
-    log_wait "Building CUDA components with GCC 9 compatibility and wrapper headers"
+    log_wait "Building CUDA components"
     make -f Makefile.gpu clean
     make -f Makefile.gpu cuda
     if [ -f "common/gpu/libcuda_kernels.so" ]; then
-      log_success "GPU acceleration components built successfully - Ready for 1M+ TPS"
+      log_success "GPU acceleration components built successfully"
       ls -la common/gpu/libcuda_kernels.so
     else
       log_wait "GPU build will complete after system reboot (driver activation required)"
