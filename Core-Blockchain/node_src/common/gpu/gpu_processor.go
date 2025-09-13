@@ -15,7 +15,7 @@ import (
 )
 
 /*
-#cgo LDFLAGS: -lOpenCL -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64
+#cgo LDFLAGS: -lOpenCL -L/root/splendor-blockchain-v4/Core-Blockchain/node_src/common/gpu -lsplendor_cuda -lcudart -L/usr/local/cuda/lib64
 
 #include <stdlib.h>
 #include <string.h>

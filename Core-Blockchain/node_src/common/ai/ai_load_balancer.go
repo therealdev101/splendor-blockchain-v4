@@ -136,18 +136,11 @@ func NewAILoadBalancer(config *AIConfig, hybridProcessor *hybrid.HybridProcessor
 		cancel:          cancel,
 	}
 	
-	// Test LLM connection
-	if err := ai.testLLMConnection(); err != nil {
-		log.Warn("LLM connection failed, AI load balancing disabled", "error", err)
-		cancel()
-		return nil, err
-	}
-	
-	// Start AI decision making loop
+	// Start AI decision making loop regardless of LLM connection
 	ai.wg.Add(1)
 	go ai.aiDecisionLoop(config.UpdateInterval)
 	
-	log.Info("AI load balancer initialized",
+	log.Info("AI load balancer initialized (will attempt LLM connection in background)",
 		"llmEndpoint", config.LLMEndpoint,
 		"llmModel", config.LLMModel,
 		"updateInterval", config.UpdateInterval,

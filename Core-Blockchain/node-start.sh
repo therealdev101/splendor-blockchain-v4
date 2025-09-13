@@ -160,7 +160,7 @@ startValidator(){
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
-        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=snap --gcmode=full --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=5000 --txpool.globalslots=100000 --txpool.accountqueue=5000 --txpool.globalqueue=100000 --maxpeers=25 --rpc.txfeecap=0 --http --http.addr 0.0.0.0 --http.api eth,net,web3,txpool,miner,debug --ws --ws.addr 0.0.0.0 --nat any --verbosity=3 console" Enter
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=full --gcmode=archive --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=5000 --txpool.globalslots=100000 --txpool.accountqueue=5000 --txpool.globalqueue=100000 --maxpeers=25 console" Enter
       fi
     fi
   done
@@ -228,33 +228,59 @@ finalize(){
   # Initialize AI status tracking
   AI_STATUS="not_available"
   
-  # Start vLLM AI service if available
-  if systemctl list-unit-files | grep -q "vllm-phi3.service"; then
+  # Start vLLM AI service directly
+  if [ -d "/opt/vllm-env" ]; then
     echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
     log_wait "Starting vLLM Phi-3 Mini AI load balancer"
     
-    if systemctl start vllm-phi3 2>/dev/null; then
-      log_success "vLLM AI service started successfully"
+    # Check if vLLM is already running
+    if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+      log_success "vLLM AI service already running"
+      AI_STATUS="fully_active"
+    else
+      # Start vLLM in background with working parameters
+      cd /opt
+      source vllm-env/bin/activate
+      
+      # Start vLLM with reduced memory usage and proper configuration
+      nohup python -m vllm.entrypoints.openai.api_server \
+        --model microsoft/Phi-3-mini-4k-instruct \
+        --host 0.0.0.0 \
+        --port 8000 \
+        --gpu-memory-utilization 0.2 \
+        --max-model-len 2048 \
+        --dtype float16 \
+        --disable-log-requests \
+        > /tmp/vllm.log 2>&1 &
+      
+      VLLM_PID=$!
+      echo $VLLM_PID > /tmp/vllm.pid
+      
+      cd /root/splendor-blockchain-v4/Core-Blockchain/
+      
+      log_success "vLLM AI service started (PID: $VLLM_PID)"
       AI_STATUS="service_started"
       
       # Wait for API to be ready (non-blocking)
-      for i in {1..10}; do
+      for i in {1..15}; do
         if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
           log_success "vLLM API ready - AI load balancing active"
           AI_STATUS="fully_active"
           break
         fi
-        sleep 2
+        echo -e "${CYAN}Waiting for vLLM API... ($i/15)${NC}"
+        sleep 3
       done
       
       # If API didn't respond but service started, it's still starting up
       if [ "$AI_STATUS" = "service_started" ]; then
         AI_STATUS="starting_up"
+        log_wait "vLLM API still initializing (check /tmp/vllm.log for progress)"
       fi
-    else
-      log_wait "vLLM service will start after GPU drivers are activated"
-      AI_STATUS="pending_reboot"
     fi
+  else
+    echo -e "\n${ORANGE}vLLM environment not found. Run setup-ai-llm.sh to install AI features.${NC}"
+    AI_STATUS="not_installed"
   fi
   
   if [ "$isRPC" = true ]; then
