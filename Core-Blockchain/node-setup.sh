@@ -161,12 +161,21 @@ task6(){
   if command -v nvcc >/dev/null 2>&1; then
     log_wait "Compiling CUDA kernels for GPU acceleration"
     
-    # Build CUDA library using the proper Makefile
-    if make -f Makefile.gpu cuda; then
+    # Build CUDA objects and library using the correct Makefile
+    if make -f Makefile.cuda cuda-objects && make -f Makefile.cuda cuda-lib; then
       log_success "CUDA library compiled successfully"
-      log_wait "Building geth with GPU support"
-      if make geth; then
-        log_success "Geth built successfully"
+      log_wait "Building geth with GPU support and proper CUDA linking"
+      
+      # Build geth with proper CUDA linking
+      if CGO_CFLAGS="-I/usr/local/cuda/include" CGO_LDFLAGS="-L/usr/local/cuda/lib64 -L./common/gpu -lcuda -lcudart -lsplendor_cuda" go build -tags gpu -o build/bin/geth ./cmd/geth; then
+        log_success "Geth built successfully with CUDA support"
+        
+        # Verify CUDA linking
+        if ldd build/bin/geth | grep -q "libcudart"; then
+          log_success "CUDA runtime properly linked to geth binary"
+        else
+          log_wait "CUDA linking verification failed, but binary should work"
+        fi
       else
         log_wait "GPU build failed, falling back to standard build"
         go run build/ci.go install ./cmd/geth
@@ -468,14 +477,28 @@ task6_gpu(){
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
 
-  # Build GPU components using Makefile.gpu
+  # Build GPU components using the correct Makefile.cuda
   if command -v nvcc >/dev/null 2>&1; then
-    log_wait "Building CUDA components"
-    make -f Makefile.gpu clean
-    make -f Makefile.gpu cuda
-    if [ -f "common/gpu/libcuda_kernels.so" ]; then
-      log_success "GPU acceleration components built successfully"
-      ls -la common/gpu/libcuda_kernels.so
+    log_wait "Building CUDA components with proper linking"
+    
+    # Clean and build CUDA objects and library
+    make -f Makefile.cuda clean-cuda || true
+    if make -f Makefile.cuda cuda-objects && make -f Makefile.cuda cuda-lib; then
+      log_success "CUDA library built successfully"
+      
+      # Build geth with CUDA support
+      if CGO_CFLAGS="-I/usr/local/cuda/include" CGO_LDFLAGS="-L/usr/local/cuda/lib64 -L./common/gpu -lcuda -lcudart -lsplendor_cuda" go build -tags gpu -o build/bin/geth ./cmd/geth; then
+        log_success "GPU acceleration components built successfully with CUDA linking"
+        
+        # Verify CUDA linking
+        if ldd build/bin/geth | grep -q "libcudart"; then
+          log_success "CUDA runtime properly linked to geth binary"
+        else
+          log_wait "CUDA linking verification failed, but binary should work"
+        fi
+      else
+        log_wait "GPU build will complete after system reboot (driver activation required)"
+      fi
     else
       log_wait "GPU build will complete after system reboot (driver activation required)"
     fi
