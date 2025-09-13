@@ -183,10 +183,10 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	PriceLimit: 1,
 	PriceBump:  10,
 
-	AccountSlots: 100000,      // 100K per account - massive increase for high-volume processing
-	GlobalSlots:  10000000,    // 10M pending transactions - 5x increase for 1M+ TPS
-	AccountQueue: 50000,       // 50K queued per account - 10x increase
-	GlobalQueue:  5000000,     // 5M queued transactions - 10x increase for massive throughput
+	AccountSlots: 1000000,     // 1M per account - single account can send 1M transactions
+	GlobalSlots:  10000000,    // 10M pending transactions - supports 10 accounts × 1M each
+	AccountQueue: 500000,      // 500K queued per account - massive queue capacity
+	GlobalQueue:  5000000,     // 5M queued transactions - total queue capacity
 
 	Lifetime: 3 * time.Hour,
 

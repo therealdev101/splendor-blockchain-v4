@@ -237,8 +237,8 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     100,  // 10x lower threshold for more GPU usage
-		adaptiveBatching:   true, // Enable adaptive batch sizing
+		batchThreshold:     1000,  // 1K threshold for GPU activation (500+ transactions trigger GPU)
+		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
 		aiOptimization:     true, // Enable AI-driven optimization
 	}
 	
@@ -883,7 +883,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 		}
 		
 		// Process batch with GPU if we have enough transactions
-		if len(txBatch) >= w.batchThreshold/2 { // Use GPU for batches >= 500 transactions
+		if len(txBatch) >= w.batchThreshold/2 { // Use GPU for batches >= 500 transactions (1000/2)
 			batchStart := time.Now()
 			log.Debug("Processing transaction batch with GPU acceleration", "batchSize", len(txBatch))
 			
