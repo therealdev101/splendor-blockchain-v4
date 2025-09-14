@@ -1,133 +1,114 @@
-# Contributor Covenant Code of Conduct
+# Code of Conduct
 
-## Our Pledge
+## 🤝 Our Commitment
 
-We as members, contributors, and leaders pledge to make participation in our
-community a harassment-free experience for everyone, regardless of age, body
-size, visible or invisible disability, ethnicity, sex characteristics, gender
-identity and expression, level of experience, education, socio-economic status,
-nationality, personal appearance, race, caste, color, religion, or sexual
-identity and orientation.
+The Splendor Blockchain community is committed to providing a welcoming, inclusive, and harassment-free environment for everyone contributing to our AI-powered, GPU-accelerated blockchain project.
 
-We pledge to act and interact in ways that contribute to an open, welcoming,
-diverse, inclusive, and healthy community.
+## 📋 Standards
 
-## Our Standards
+### ✅ Encouraged Behavior
+- **Respectful Communication**: Be kind and professional in all interactions
+- **Constructive Feedback**: Provide helpful, actionable feedback on code and ideas
+- **Collaborative Spirit**: Work together to improve AI and GPU optimization
+- **Knowledge Sharing**: Share insights about blockchain, AI, and GPU development
+- **Inclusive Language**: Use welcoming language that includes all community members
+- **Technical Excellence**: Strive for high-quality code and documentation
 
-Examples of behavior that contributes to a positive environment for our
-community include:
+### ❌ Unacceptable Behavior
+- Harassment, discrimination, or offensive comments
+- Personal attacks or trolling
+- Spam or off-topic discussions
+- Sharing private information without permission
+- Any behavior that disrupts the collaborative environment
 
-* Demonstrating empathy and kindness toward other people
-* Being respectful of differing opinions, viewpoints, and experiences
-* Giving and gracefully accepting constructive feedback
-* Accepting responsibility and apologizing to those affected by our mistakes,
-  and learning from the experience
-* Focusing on what is best not just for us as individuals, but for the overall
-  community
+## 🎯 Community Focus
 
-Examples of unacceptable behavior include:
+Our community is focused on:
+- **AI Innovation**: Advancing TinyLlama 1.1B integration and optimization
+- **GPU Performance**: Maximizing RTX 4000 SFF Ada capabilities
+- **Parallel Processing**: Improving multi-core transaction processing
+- **High Performance**: Achieving and exceeding 100K+ TPS targets
+- **Technical Excellence**: Building the best AI-powered blockchain
 
-* The use of sexualized language or imagery, and sexual attention or advances of
-  any kind
-* Trolling, insulting or derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or email address,
-  without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
-  professional setting
+## 🔧 Technical Discussions
 
-## Enforcement Responsibilities
+### Encouraged Topics
+- AI load balancing improvements
+- GPU acceleration optimization
+- Parallel processing enhancements
+- Performance benchmarking and testing
+- Security and reliability improvements
+- Documentation and tutorials
 
-Community leaders are responsible for clarifying and enforcing our standards of
-acceptable behavior and will take appropriate and fair corrective action in
-response to any behavior that they deem inappropriate, threatening, offensive,
-or harmful.
+### Guidelines for Technical Discussions
+- **Be Specific**: Reference actual code, benchmarks, or implementations
+- **Share Data**: Include performance metrics and test results
+- **Cite Sources**: Reference documentation, papers, or proven techniques
+- **Test Claims**: Verify performance improvements with actual benchmarks
+- **Document Changes**: Update relevant documentation with improvements
 
-Community leaders have the right and responsibility to remove, edit, or reject
-comments, commits, code, wiki edits, issues, and other contributions that are
-not aligned to this Code of Conduct, and will communicate reasons for moderation
-decisions when appropriate.
+## 📞 Reporting Issues
 
-## Scope
+### Technical Issues
+- **GitHub Issues**: For bugs, feature requests, and technical problems
+- **Performance Issues**: Include system specs, benchmarks, and logs
+- **AI/GPU Issues**: Provide hardware details and error messages
 
-This Code of Conduct applies within all community spaces, and also applies when
-an individual is officially representing the community in public spaces.
-Examples of representing our community include using an official e-mail address,
-posting via an official social media account, or acting as an appointed
-representative at an online or offline event.
+### Community Issues
+If you experience or witness unacceptable behavior:
 
-## Enforcement
+1. **Direct Resolution**: Address minor issues directly and respectfully
+2. **Community Moderators**: Contact project maintainers for serious issues
+3. **GitHub Reports**: Use GitHub's reporting features for platform violations
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-conduct@splendor.org.
+### Contact Information
+- **Project Maintainers**: Available through GitHub issues and discussions
+- **Community Channels**: 
+  - Telegram: [Splendor Labs](https://t.me/SplendorLabs)
+  - Twitter: [@SplendorLabs](https://x.com/splendorlabs)
 
-All complaints will be reviewed and investigated promptly and fairly.
+## ⚖️ Enforcement
 
-All community leaders are obligated to respect the privacy and security of the
-reporter of any incident.
+### Consequences
+Community leaders may take action including:
+- **Warning**: Private or public warning about inappropriate behavior
+- **Temporary Suspension**: Temporary ban from community interactions
+- **Permanent Ban**: Permanent removal from the community
 
-## Enforcement Guidelines
+### Appeals Process
+If you believe enforcement action was taken in error:
+1. Contact project maintainers with details
+2. Provide context and evidence
+3. Request review of the decision
 
-Community leaders will follow these Community Impact Guidelines in determining
-the consequences for any action they deem in violation of this Code of Conduct:
+## 🌟 Recognition
 
-### 1. Correction
+We celebrate contributors who:
+- **Improve Performance**: Achieve measurable TPS or latency improvements
+- **Enhance AI Systems**: Advance TinyLlama integration and optimization
+- **Optimize GPU Usage**: Maximize RTX 4000 SFF Ada utilization
+- **Share Knowledge**: Create helpful documentation and tutorials
+- **Support Community**: Help other developers and users
 
-**Community Impact**: Use of inappropriate language or other behavior deemed
-unprofessional or unwelcome in the community.
+## 📚 Resources
 
-**Consequence**: A private, written warning from community leaders, providing
-clarity around the nature of the violation and an explanation of why the
-behavior was inappropriate. A public apology may be requested.
+- **Technical Documentation**: [Technical Architecture](TECHNICAL_ARCHITECTURE.md)
+- **Contributing Guide**: [Contributing](CONTRIBUTING.md)
+- **Troubleshooting**: [Troubleshooting Guide](TROUBLESHOOTING.md)
+- **Getting Started**: [Getting Started Guide](GETTING_STARTED.md)
 
-### 2. Warning
+## 🔄 Updates
 
-**Community Impact**: A violation through a single incident or series of
-actions.
+This Code of Conduct may be updated to reflect community growth and changing needs. All community members will be notified of significant changes.
 
-**Consequence**: A warning with consequences for continued behavior. No
-interaction with the people involved, including unsolicited interaction with
-those enforcing the Code of Conduct, for a specified period of time. This
-includes avoiding interactions in community spaces as well as external channels
-like social media. Violating these terms may lead to a temporary or permanent
-ban.
-
-### 3. Temporary Ban
-
-**Community Impact**: A serious violation of community standards, including
-sustained inappropriate behavior.
-
-**Consequence**: A temporary ban from any sort of interaction or public
-communication with the community for a specified period of time. No public or
-private interaction with the people involved, including unsolicited interaction
-with those enforcing the Code of Conduct, is allowed during this period.
-Violating these terms may lead to a permanent ban.
-
-### 4. Permanent Ban
-
-**Community Impact**: Demonstrating a pattern of violation of community
-standards, including sustained inappropriate behavior, harassment of an
-individual, or aggression toward or disparagement of classes of individuals.
-
-**Consequence**: A permanent ban from any sort of public interaction within the
-community.
+---
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage],
-version 2.1, available at
-[https://www.contributor-covenant.org/version/2/1/code_of_conduct.html][v2.1].
+This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org/), version 2.1, and customized for the Splendor Blockchain AI-powered development community.
 
-Community Impact Guidelines were inspired by
-[Mozilla's code of conduct enforcement ladder][Mozilla CoC].
+---
 
-For answers to common questions about this code of conduct, see the FAQ at
-[https://www.contributor-covenant.org/faq][FAQ]. Translations are available at
-[https://www.contributor-covenant.org/translations][translations].
+*Together, we're building the future of AI-powered blockchain technology. Let's do it with respect, collaboration, and technical excellence.*
 
-[homepage]: https://www.contributor-covenant.org
-[v2.1]: https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
-[Mozilla CoC]: https://github.com/mozilla/diversity
-[FAQ]: https://www.contributor-covenant.org/faq
-[translations]: https://www.contributor-covenant.org/translations
+**Last Updated**: September 2025

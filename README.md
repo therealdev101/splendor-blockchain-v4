@@ -255,30 +255,19 @@ npm run benchmark:gpu
 npm run verify:performance
 ```
 
-## 📚 Documentation Hub
+## 📚 Documentation
 
-**📖 [Complete Documentation](docs/README.md)** - Your comprehensive resource center
-
-### 🤖 AI & Performance Documentation
+### 🤖 **Core Guides**
 - **[Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)** - Complete GPU and parallel processing implementation details
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete setup including AI and GPU
-- **[API Reference](docs/API_REFERENCE.md)** - AI-enhanced RPC endpoints and monitoring
 - **[Validator Guide](docs/VALIDATOR_GUIDE.md)** - Run high-performance AI-optimized validators
-
-### 📋 Core Documentation
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete setup and installation
-- **[MetaMask Setup](docs/METAMASK_SETUP.md)** - Wallet configuration for AI mainnet
-- **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation with AI endpoints
-- **[Smart Contract Development](docs/SMART_CONTRACTS.md)** - Build and deploy on AI-optimized network
-- **[Validator Guide](docs/VALIDATOR_GUIDE.md)** - Run AI-enhanced validators
-- **[Deployment Checklist](docs/DEPLOYMENT_CHECKLIST.md)** - Production deployment guide
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - AI/GPU troubleshooting guide
-
-### 🔧 Development Resources
 - **[RPC Setup Guide](docs/RPC_SETUP_GUIDE.md)** - AI-enhanced RPC configuration
-- **[Contributing Guide](docs/CONTRIBUTING.md)** - Contribute to AI development
+
+### 🔧 **Development**
+- **[API Reference](docs/API_REFERENCE.md)** - AI-enhanced RPC endpoints and monitoring
+- **[Smart Contract Development](docs/SMART_CONTRACTS.md)** - Build and deploy on AI-optimized network
+- **[MetaMask Setup](docs/METAMASK_SETUP.md)** - Wallet configuration for AI mainnet
 - **[Security Policy](docs/SECURITY.md)** - AI system security practices
-- **[Code of Conduct](docs/CODE_OF_CONDUCT.md)** - Community guidelines
 
 ## 🏗️ AI-Enhanced Architecture
 
