@@ -231,7 +231,7 @@ finalize(){
   # Start vLLM AI service directly
   if [ -d "/opt/vllm-env" ]; then
     echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
-    log_wait "Starting vLLM Phi-3 Mini AI load balancer"
+    log_wait "Starting vLLM TinyLlama 1.1B AI load balancer"
     
     # Check if vLLM is already running
     if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
@@ -244,7 +244,7 @@ finalize(){
       
       # Start vLLM with reduced memory usage and proper configuration
       nohup python -m vllm.entrypoints.openai.api_server \
-        --model microsoft/Phi-3-mini-4k-instruct \
+        --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
         --host 0.0.0.0 \
         --port 8000 \
         --gpu-memory-utilization 0.2 \
@@ -326,7 +326,7 @@ finalize(){
   # Check AI system based on tracked status
   case "$AI_STATUS" in
     "fully_active")
-      echo -e "${GREEN}✅ AI System: vLLM Phi-3 Mini active (5M+ TPS ready)${NC}"
+      echo -e "${GREEN}✅ AI System: vLLM TinyLlama 1.1B active (150K+ TPS ready)${NC}"
       ;;
     "service_started"|"starting_up")
       echo -e "${GREEN}✅ AI System: vLLM service active (API initializing)${NC}"

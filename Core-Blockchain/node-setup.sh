@@ -784,8 +784,8 @@ install_nvm() {
 }
 
 install_ai_llm(){
-  # Install AI-powered load balancing (vLLM + Phi-3 Mini) TASK AI
-  log_wait "Installing AI-powered load balancing system (vLLM + Phi-3 Mini)" && progress_bar
+  # Install AI-powered load balancing (vLLM + TinyLlama 1.1B) TASK AI
+  log_wait "Installing AI-powered load balancing system (vLLM + TinyLlama 1.1B)" && progress_bar
   
   # Install Python dependencies for vLLM (10%)
   log_wait "Installing Python dependencies for AI system [10%]" && progress_bar
@@ -853,7 +853,7 @@ install_ai_llm(){
   
   # Create vLLM systemd service with proper GPU memory allocation
   log_wait "Setting up vLLM as system service with optimized GPU memory allocation"
-  cat > /etc/systemd/system/vllm-phi3.service << EOF
+  cat > /etc/systemd/system/vllm-tinyllama.service << EOF
 [Unit]
 Description=vLLM TinyLlama Service for Blockchain AI
 After=network.target
@@ -877,7 +877,7 @@ EOF
 
   # Enable vLLM service
   systemctl daemon-reload
-  systemctl enable vllm-phi3
+  systemctl enable vllm-tinyllama
   
   # Add AI configuration to .env
   log_wait "Configuring AI load balancing settings"
@@ -971,7 +971,7 @@ verify_installation(){
   fi
   
   # Check vLLM systemd service
-  if systemctl list-unit-files | grep -q "vllm-phi3.service"; then
+  if systemctl list-unit-files | grep -q "vllm-tinyllama.service"; then
     log_success "✅ vLLM systemd service configured"
   else
     log_error "❌ vLLM systemd service not found"
@@ -1016,7 +1016,7 @@ verify_installation(){
     echo -e "${GREEN}║  All components installed successfully!                     ║${NC}"
     echo -e "${GREEN}║  • Go + Geth blockchain node                                ║${NC}"
     echo -e "${GREEN}║  • GPU acceleration (CUDA + OpenCL)                        ║${NC}"
-    echo -e "${GREEN}║  • AI system (vLLM + Phi-3 Mini)                           ║${NC}"
+    echo -e "${GREEN}║  • AI system (vLLM + TinyLlama 1.1B)                       ║${NC}"
     echo -e "${GREEN}║  • Node.js ecosystem (yarn + pm2)                          ║${NC}"
     echo -e "${GREEN}║                                                              ║${NC}"
     echo -e "${GREEN}║  Ready to start with: ./node-start.sh                      ║${NC}"
@@ -1104,7 +1104,7 @@ finalize(){
   yarn
   cd $nodePath
 
-  # Install AI-powered load balancing (vLLM + Phi-3 Mini)
+  # Install AI-powered load balancing (vLLM + TinyLlama 1.1B)
   install_ai_llm
 
   # Perform comprehensive verification before completion

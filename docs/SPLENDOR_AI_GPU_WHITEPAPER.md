@@ -8,7 +8,7 @@
 
 ## Abstract
 
-This whitepaper presents Splendor, the world's first AI-powered blockchain with real-time GPU acceleration, capable of processing over 100 million transactions per second. By combining advanced GPU computing (NVIDIA A40/A100/H100), intelligent AI load balancing (vLLM + Phi-3 Mini), and optimized consensus mechanisms, Splendor achieves unprecedented blockchain performance while maintaining enterprise-grade security and reliability.
+This whitepaper presents Splendor, the world's first AI-powered blockchain with real-time GPU acceleration, capable of processing over 100 million transactions per second. By combining advanced GPU computing (NVIDIA A40/A100/H100), intelligent AI load balancing (vLLM + TinyLlama 1.1B), and optimized consensus mechanisms, Splendor achieves unprecedented blockchain performance while maintaining enterprise-grade security and reliability.
 
 **Key Innovations:**
 - Real-time AI load balancing with 500ms decision intervals
@@ -52,7 +52,7 @@ Traditional blockchain networks face fundamental scalability limitations, with B
 
 Splendor introduces a revolutionary approach combining:
 
-1. **AI-Powered Load Balancing**: Real-time optimization using Microsoft's Phi-3 Mini (3.8B) model
+1. **AI-Powered Load Balancing**: Real-time optimization using TinyLlama 1.1B model
 2. **GPU Acceleration**: Massive parallel processing with CUDA/OpenCL kernels
 3. **Hybrid Architecture**: Intelligent CPU/GPU workload distribution
 4. **Dynamic Optimization**: Continuous performance tuning based on real-time metrics
@@ -114,7 +114,7 @@ Existing blockchains use fixed parameters that cannot adapt to varying workloads
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
 │  │   vLLM AI   │    │   Hybrid    │    │   GPU       │    │   CPU       │  │
 │  │Load Balancer│◄──►│ Processor   │◄──►│ Processor   │    │ Processor   │  │
-│  │(Phi-3 Mini) │    │             │    │ (CUDA/OCL)  │    │ (Go Pool)   │  │
+│  │(TinyLlama)  │    │             │    │ (CUDA/OCL)  │    │ (Go Pool)   │  │
 │  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
 │         │                   │                   │                   │      │
 │         ▼                   ▼                   ▼                   ▼      │
@@ -136,7 +136,7 @@ Existing blockchains use fixed parameters that cannot adapt to varying workloads
 
 **AI Layer:**
 - **vLLM Inference Engine**: Ultra-fast LLM serving with 500ms response times
-- **Phi-3 Mini (3.8B)**: Microsoft's efficient language model for decision making
+- **TinyLlama 1.1B**: Efficient language model for decision making
 - **Performance Monitor**: Real-time metrics collection and analysis
 - **Decision Engine**: Confidence-based optimization recommendations
 
@@ -164,8 +164,8 @@ Existing blockchains use fixed parameters that cannot adapt to varying workloads
 - **GPU memory optimization**: Only 30% GPU memory usage for AI
 - **Concurrent processing**: Multiple inference requests simultaneously
 
-**Phi-3 Mini (3.8B) Model:**
-- **Efficient architecture**: 3.8B parameters vs 7B+ alternatives
+**TinyLlama 1.1B Model:**
+- **Efficient architecture**: 1.1B parameters vs 3.8B+ alternatives
 - **Fast inference**: <2 second response times
 - **Specialized training**: Optimized for reasoning and decision making
 - **Low memory footprint**: ~6GB VRAM usage
@@ -653,7 +653,7 @@ GPU_TX_WORKERS=32
 # AI Load Balancing (vLLM + Phi-3)
 ENABLE_AI_LOAD_BALANCING=true
 LLM_ENDPOINT=http://localhost:8000/v1/completions
-LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
+LLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0
 AI_UPDATE_INTERVAL_MS=500
 
 # Performance Targets
@@ -837,8 +837,8 @@ MAX_GPU_UTILIZATION=0.98
 - **Q4 2026**: 500M TPS with next-gen hardware
 
 **AI Development:**
-- **Current**: Phi-3 Mini (3.8B) with 500ms decisions
-- **Q1 2026**: Phi-3 Medium (14B) with 200ms decisions
+- **Current**: TinyLlama 1.1B with 250ms decisions
+- **Q1 2026**: Larger models (7B+) with 200ms decisions
 - **Q3 2026**: Custom blockchain-optimized model
 - **Q4 2026**: Multi-modal AI with predictive capabilities
 
@@ -956,7 +956,7 @@ contract HFTEngine {
 - Performance optimization and tuning
 
 **2026 Q1: Advanced AI Integration**
-- Larger AI models (Phi-3 Medium 14B)
+- Larger AI models (7B+ parameters)
 - Predictive load balancing
 - Multi-modal AI capabilities
 - Custom blockchain-optimized models
@@ -1065,7 +1065,7 @@ This work builds upon the contributions of the open-source blockchain community,
 
 1. Nakamoto, S. (2008). Bitcoin: A Peer-to-Peer Electronic Cash System
 2. Buterin, V. (2014). Ethereum: A Next-Generation Smart Contract and Decentralized Application Platform
-3. Microsoft Research. (2024). Phi-3 Technical Report
+3. TinyLlama Team. (2024). TinyLlama Technical Report
 4. NVIDIA Corporation. (2023). CUDA Programming Guide
 5. UC Berkeley. (2023). vLLM: Easy, Fast, and Cheap LLM Serving
 6. Congress Consensus. (2023). Proof-of-Stake-Authority Implementation
@@ -1087,7 +1087,7 @@ GET /v1/models
 # Generate completion
 POST /v1/completions
 {
-  "model": "microsoft/Phi-3-mini-4k-instruct",
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
   "prompt": "Performance analysis prompt",
   "max_tokens": 200,
   "temperature": 0.1

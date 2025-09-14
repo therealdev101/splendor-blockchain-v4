@@ -12,7 +12,7 @@ Welcome to the comprehensive documentation for Splendor Blockchain V4 - the worl
 - **[GPU TPS Scaling Chart](GPU_TPS_SCALING_CHART.md)** - Performance benchmarks and scaling analysis
 
 ### 🧠 AI Features Overview
-- **AI Load Balancer**: Phi-3 Mini (3.8B) for real-time CPU/GPU optimization
+- **AI Load Balancer**: TinyLlama 1.1B for real-time CPU/GPU optimization
 - **AI Transaction Predictor**: Pattern analysis and batch optimization
 - **Hybrid Processing Intelligence**: Seamless CPU/GPU/AI coordination
 - **Performance Gains**: 500K-2M+ TPS (vs 159K baseline)
@@ -75,7 +75,7 @@ Welcome to the comprehensive documentation for Splendor Blockchain V4 - the worl
 
 ### Core AI Components
 
-#### 1. **AI Load Balancer** (Phi-3 Mini 3.8B)
+#### 1. **AI Load Balancer** (TinyLlama 1.1B)
 - **Real-time Optimization**: 250ms decision cycles
 - **Response Time**: <1 second via local vLLM
 - **Learning Rate**: 0.25 (aggressive adaptation)
@@ -194,7 +194,7 @@ For significant AI additions or restructuring:
 This AI documentation is actively maintained and updated regularly. Key information:
 
 - **Last Updated**: January 2025
-- **AI Version**: 4.0.0 (Phi-3 Mini Integration)
+- **AI Version**: 4.0.0 (TinyLlama 1.1B Integration)
 - **Update Frequency**: Weekly for AI updates, immediately for critical AI changes
 - **AI Changelog**: See [AI_CHANGELOG.md](../AI_CHANGELOG.md) for detailed AI update history
 
