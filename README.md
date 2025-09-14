@@ -260,6 +260,7 @@ npm run verify:performance
 **📖 [Complete Documentation](docs/README.md)** - Your comprehensive resource center
 
 ### 🤖 AI & Performance Documentation
+- **[Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)** - Complete GPU and parallel processing implementation details
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete setup including AI and GPU
 - **[API Reference](docs/API_REFERENCE.md)** - AI-enhanced RPC endpoints and monitoring
 - **[Validator Guide](docs/VALIDATOR_GUIDE.md)** - Run high-performance AI-optimized validators
