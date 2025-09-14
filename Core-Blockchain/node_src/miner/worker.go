@@ -274,7 +274,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	parallelConfig.MaxMemoryUsage = 6 * 1024 * 1024 * 1024  // 6GB RAM (leave room for AI)
 	parallelConfig.MaxGoroutines = cpuCores * 24    // Aggressive parallelization
 	parallelConfig.StateWorkers = cpuCores * 2      // Full CPU state processing
-	parallelConfig.ValidationWorkers = cpuCores * 2 // Full CPU validation
+	parallelConfig.MaxValidationWorkers = cpuCores * 2 // Full CPU validation
 	
 	log.Info("Configuring parallel processing for full hardware utilization",
 		"cpuCores", cpuCores,

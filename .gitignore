@@ -148,3 +148,4 @@ GPU_PARALLEL_PROCESSING_ANALYSIS_AND_IMPROVEMENTS.md
 # CUDA compiled files
 *.o
 *.a
+Core-Blockchain/scripts/performance-monitor.py
