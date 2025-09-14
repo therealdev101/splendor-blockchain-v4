@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"math/big"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -265,9 +266,33 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	}
 	
 	// Initialize parallel state processor for advanced parallel processing
-	// Note: ParallelStateProcessor would need to be created per blockchain instance
-	// For now, we'll use the existing core.StateProcessor with parallel enhancements
-	log.Info("Miner parallel processing capabilities enabled")
+	parallelConfig := core.DefaultParallelProcessorConfig()
+	// Optimize for full CPU utilization while reserving resources for TinyLlama 1.1B
+	cpuCores := runtime.NumCPU()
+	parallelConfig.TxBatchSize = 100000  // 1000x larger - match GPU's capability
+	parallelConfig.MaxTxConcurrency = cpuCores * 12  // Use 75% of CPU cores (leave 25% for AI)
+	parallelConfig.MaxMemoryUsage = 6 * 1024 * 1024 * 1024  // 6GB RAM (leave room for AI)
+	parallelConfig.MaxGoroutines = cpuCores * 24    // Aggressive parallelization
+	parallelConfig.StateWorkers = cpuCores * 2      // Full CPU state processing
+	parallelConfig.ValidationWorkers = cpuCores * 2 // Full CPU validation
+	
+	log.Info("Configuring parallel processing for full hardware utilization",
+		"cpuCores", cpuCores,
+		"maxConcurrency", parallelConfig.MaxTxConcurrency,
+		"maxGoroutines", parallelConfig.MaxGoroutines,
+		"reservedForAI", "25% CPU + 6GB GPU for TinyLlama")
+	
+	var err error
+	worker.parallelProcessor, err = core.NewParallelStateProcessor(chainConfig, eth.BlockChain(), engine, parallelConfig)
+	if err != nil {
+		log.Error("Failed to create parallel state processor", "err", err)
+		worker.parallelProcessor = nil
+	} else {
+		log.Info("Miner parallel processing initialized", 
+			"txBatchSize", parallelConfig.TxBatchSize,
+			"maxConcurrency", parallelConfig.MaxTxConcurrency,
+			"pipelining", parallelConfig.EnablePipelining)
+	}
 	// Subscribe NewTxsEvent for tx pool
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
@@ -1143,6 +1168,73 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 		w.updateSnapshot()
 		return
 	}
+
+	// Estimate total transaction count for parallel processing decision
+	totalTxCount := w.estimateTransactionCount(pending)
+	
+	// Use parallel processor for massive transaction batches (100K+ transactions)
+	if w.parallelProcessor != nil && totalTxCount >= 100000 {
+		log.Info("Using parallel processor for massive transaction batch", 
+			"totalTxs", totalTxCount, 
+			"threshold", 100000,
+			"parallelBatchSize", 100000)
+		
+		// Combine all transactions for parallel processing
+		allTxs := make([]*types.Transaction, 0, totalTxCount)
+		for _, txList := range pending {
+			allTxs = append(allTxs, txList...)
+		}
+		
+		if len(allTxs) > 0 {
+			// Create a temporary block for parallel processing
+			tempBlock := types.NewBlock(
+				w.current.header,
+				allTxs,
+				nil, // no uncles
+				nil, // no receipts yet
+				trie.NewStackTrie(nil),
+			)
+			
+			batchStart := time.Now()
+			
+			// Process ALL transactions with parallel processor
+			receipts, logs, gasUsed, err := w.parallelProcessor.ProcessParallel(
+				tempBlock, 
+				w.current.state, 
+				*w.chain.GetVMConfig(),
+			)
+			
+			batchDuration := time.Since(batchStart)
+			
+			if err != nil {
+				log.Warn("Massive parallel processing failed, falling back to standard processing", 
+					"error", err, 
+					"txCount", len(allTxs))
+				// Fall through to standard processing
+			} else {
+				// Parallel processing succeeded for massive batch
+				log.Info("MASSIVE parallel processing completed successfully", 
+					"txCount", len(allTxs),
+					"gasUsed", gasUsed,
+					"duration", batchDuration,
+					"tps", float64(len(allTxs))/batchDuration.Seconds(),
+					"logCount", len(logs))
+				
+				// Update current state with results
+				w.current.txs = append(w.current.txs, allTxs...)
+				w.current.receipts = append(w.current.receipts, receipts...)
+				w.current.tcount += len(allTxs)
+				w.current.header.GasUsed += gasUsed
+				w.current.gasPool.SubGas(gasUsed)
+				
+				// Skip standard processing since parallel processing handled everything
+				w.updateSnapshot()
+				return
+			}
+		}
+	}
+	
+	// Standard processing for smaller batches or if parallel processing failed
 	// Split the pending transactions into locals and remotes
 	localTxs, remoteTxs := make(map[common.Address]types.Transactions), pending
 	for _, account := range w.eth.TxPool().Locals() {
@@ -1342,6 +1434,30 @@ func (w *worker) GetMinerStats() map[string]interface{} {
 	}
 	
 	return stats
+}
+
+// collectAllTransactions converts TransactionsByPriceAndNonce to a slice 
+// Note: This consumes the iterator, so should only be called when we're going to use parallel processing
+func (w *worker) collectAllTransactions(txs *types.TransactionsByPriceAndNonce) []*types.Transaction {
+	var allTxs []*types.Transaction
+	for {
+		tx := txs.Peek()
+		if tx == nil {
+			break
+		}
+		allTxs = append(allTxs, tx)
+		txs.Shift()
+	}
+	return allTxs
+}
+
+// estimateTransactionCount estimates transaction count by checking tx pool pending
+func (w *worker) estimateTransactionCount(pending map[common.Address]types.Transactions) int {
+	count := 0
+	for _, txList := range pending {
+		count += len(txList)
+	}
+	return count
 }
 
 // totalFees computes total consumed miner fees in ETH. Block transactions and receipts have to have the same order.

@@ -118,14 +118,15 @@ type GPUConfig struct {
 }
 
 // DefaultGPUConfig returns optimized GPU configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM)
+// Balanced for blockchain processing + TinyLlama 1.1B AI model
 func DefaultGPUConfig() *GPUConfig {
 	return &GPUConfig{
 		PreferredGPUType: GPUTypeOpenCL, // Prefer OpenCL for RTX 4000 SFF Ada
-		MaxBatchSize:     200000,        // 4x increase - 200K batches for massive throughput
-		MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for system)
-		HashWorkers:      50,            // 2.5x increase - 50 workers for RTX 4000 SFF Ada
-		SignatureWorkers: 50,            // 2.5x increase - 50 workers for signature verification
-		TxWorkers:        50,            // 2.5x increase - 50 workers for transaction processing
+		MaxBatchSize:     800000,        // 4x increase - 800K batches (reserve GPU for AI)
+		MaxMemoryUsage:   14 * 1024 * 1024 * 1024, // 14GB GPU memory (6GB for TinyLlama + system)
+		HashWorkers:      80,            // 80 workers - balance with AI workload
+		SignatureWorkers: 80,            // 80 workers - balance with AI workload  
+		TxWorkers:        80,            // 80 workers - balance with AI workload
 		EnablePipelining: true,
 	}
 }
