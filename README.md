@@ -102,6 +102,10 @@ Our blockchain has achieved and verified the following transaction throughput in
 
 *Live screenshot showing actual 80,000 TPS and 100,000 TPS benchmark results from our mainnet testing environment*
 
+![Additional Performance Data](data2.jpeg)
+
+*Additional performance metrics and system monitoring data from our AI-optimized blockchain testing*
+
 #### **80,000 TPS Benchmark**
 ```
 +------------------+--------+-----+-------------+---------+
