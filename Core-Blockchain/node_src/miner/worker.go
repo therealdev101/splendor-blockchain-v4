@@ -850,6 +850,11 @@ func (w *worker) updateSnapshot() {
 func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Address) ([]*types.Log, error) {
 	snap := w.current.state.Snapshot()
 
+	// Ensure gasPool is initialized before using it
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+	}
+
 	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &coinbase, w.current.gasPool, w.current.state, w.current.header, tx, &w.current.header.GasUsed, *w.chain.GetVMConfig(), w.current.extraValidator)
 	if err != nil {
 		w.current.state.RevertToSnapshot(snap)
@@ -1225,6 +1230,11 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 				w.current.receipts = append(w.current.receipts, receipts...)
 				w.current.tcount += len(allTxs)
 				w.current.header.GasUsed += gasUsed
+				
+				// Ensure gasPool is initialized before using it
+				if w.current.gasPool == nil {
+					w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+				}
 				w.current.gasPool.SubGas(gasUsed)
 				
 				// Skip standard processing since parallel processing handled everything
