@@ -149,3 +149,5 @@ GPU_PARALLEL_PROCESSING_ANALYSIS_AND_IMPROVEMENTS.md
 *.o
 *.a
 Core-Blockchain/scripts/performance-monitor.py
+# Proofs folder (contains large block data files and scripts)
+proofs/
