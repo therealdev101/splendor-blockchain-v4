@@ -10,7 +10,7 @@ A high-performance blockchain combining AI optimization, GPU acceleration, and a
 
 ## Overview
 
-Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combines artificial intelligence with high-performance computing to deliver enhanced transaction throughput and intelligent system optimization. The network achieves verified performance of 824,000+ TPS with full EVM compatibility.
+Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combines artificial intelligence with high-performance computing to deliver enhanced transaction throughput and intelligent system optimization. The network achieves verified performance of 2.35M TPS with full EVM compatibility.
 
 ### Key Features
 
@@ -45,7 +45,7 @@ Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combi
 | Arbitrum | ~4K | ✅ | 267x |
 | Optimism | ~2K | ✅ | 133x |
 | BSC | ~300 | ✅ | 20x |
-| **Splendor AI** | **824K+ Verified** | **✅** | **54,933x** |
+| **Splendor AI** | **2.35M Verified** | **✅** | **156,667x** |
 
 ## Performance Documentation
 
