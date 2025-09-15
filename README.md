@@ -213,6 +213,33 @@ Splendor uses an AI-enhanced Proof of Authority consensus called "Congress":
 - Metaverse economies with AI optimization
 - Predictive collectibles with AI rarity analysis
 
+## Development Roadmap
+
+### ✅ Completed (2025)
+- **AI Load Balancer Integration**: TinyLlama 1.1B AI system deployed and operational
+- **GPU Acceleration**: RTX 4000 SFF Ada optimization with CUDA/OpenCL support
+- **High-Performance Achievement**: Verified 2.35M TPS with 824K sustained throughput
+- **Hybrid Processing**: CPU/GPU/AI coordination system implemented
+- **Congress Consensus**: AI-enhanced PoA consensus with Byzantine fault tolerance
+- **Mainnet Deployment**: Live network with verified performance metrics
+- **EVM Compatibility**: Full Ethereum tooling integration
+- **Security Audits**: Comprehensive security analysis and fixes applied
+- **Monitoring Systems**: Real-time performance and health monitoring
+- **Documentation**: Complete technical and user documentation
+
+### 🔄 Current Focus (Q4 2025)
+- **Network Stability**: Ongoing monitoring and optimization
+- **Performance Tuning**: AI model refinement and optimization
+- **Developer Ecosystem**: Enhanced tooling and SDK development
+- **Community Growth**: Expanding developer and validator communities
+
+### 📋 Planned (2026)
+- **Multi-GPU Scaling**: Support for multiple GPU configurations
+- **Advanced AI Models**: Integration of larger parameter AI models
+- **Cross-Chain Bridges**: Interoperability with major blockchain networks
+- **Enterprise Features**: Advanced governance and compliance tools
+- **Layer 2 Solutions**: Scaling solutions for specific use cases
+
 ## Community & Support
 
 ### Community
@@ -225,6 +252,15 @@ Splendor uses an AI-enhanced Proof of Authority consensus called "Congress":
 - Enterprise AI support and consulting
 - AI integration development services
 - Developer training and certification programs
+
+## Documentation
+
+- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Complete setup including AI and GPU
+- **[Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)** - GPU and parallel processing details
+- **[Validator Guide](docs/VALIDATOR_GUIDE.md)** - Run AI-optimized validators
+- **[API Reference](docs/API_REFERENCE.md)** - AI-enhanced RPC endpoints
+- **[Smart Contract Development](docs/SMART_CONTRACTS.md)** - Build and deploy guide
+- **[Security Policy](docs/SECURITY.md)** - Security practices and audits
 
 ## License
 
