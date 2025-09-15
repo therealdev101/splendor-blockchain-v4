@@ -1158,14 +1158,16 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 	commitUncles(w.localUncles)
 	commitUncles(w.remoteUncles)
 
-	// Create an empty block based on temporary copied state for
-	// sealing in advance without waiting block execution finished.
-	if !noempty && atomic.LoadUint32(&w.noempty) == 0 {
-		w.commit(uncles, nil, false, tstart)
-	}
-
 	// Fill the block with all available pending transactions.
 	pending := w.eth.TxPool().Pending(true)
+	
+	// Create an empty block based on temporary copied state for
+	// sealing in advance without waiting block execution finished.
+	// BUT ONLY if there are no pending transactions to avoid empty blocks when we have transactions
+	if !noempty && atomic.LoadUint32(&w.noempty) == 0 && len(pending) == 0 {
+		w.commit(uncles, nil, false, tstart)
+	}
+	
 	// Short circuit if there is no available pending transactions.
 	// But if we disable empty precommit already, ignore it. Since
 	// empty block is necessary to keep the liveness of the network.
@@ -1238,7 +1240,8 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 				w.current.gasPool.SubGas(gasUsed)
 				
 				// Skip standard processing since parallel processing handled everything
-				w.updateSnapshot()
+				// But we still need to commit the block with the processed transactions
+				w.commit(uncles, w.fullTaskHook, true, tstart)
 				return
 			}
 		}
