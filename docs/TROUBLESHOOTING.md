@@ -72,6 +72,22 @@ curl -H "Content-Type: application/json" \
 # Should show AI active and GPU utilization 95-98%
 ```
 
+#### Diagnose Block Commit Contention
+**Goal**: Identify which phase of the block commit critical section is slow.
+**Steps**:
+
+1. **Enable metrics scraping** (or watch the `metric` log channel) while committing blocks.
+2. **Track lock pressure**:
+   - `chain/write/lock/wait`: time spent waiting to enter the critical section.
+   - `chain/write/lock/held`: how long the mutex stayed locked per block.
+3. **Measure commit sub-phases**:
+   - `chain/write/asynccommit`: duration of the `StateDB.AsyncCommit` call.
+   - `chain/write/trie/gc`: time spent flushing or GC-ing tries in the `afterCommit` callback.
+   - `chain/write/batchwait`: how long the goroutine that writes block data to disk keeps the caller waiting.
+   - `chain/head/update`: total time to update the canonical head and emit events.
+4. **Correlate with logs**: each timer also emits a `metric` log (`asyncCommit`, `blockBatchWait`, `blockBatchWrite`, `canonicalUpdate`, `trieGC`) tagged with block number and hash so you can line up spikes with specific blocks.
+5. **Act**: whichever metric dominates the `chain/write/lock/held` time is the bottleneck—optimize or scale that component first.
+
 ### Node Sync Issues
 
 #### Node Won't Sync
