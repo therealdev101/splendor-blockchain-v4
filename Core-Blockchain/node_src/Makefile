@@ -19,12 +19,18 @@ all:
 gpu:
 	@echo "Building GPU acceleration components..."
 	@if [ -f "Makefile.gpu" ]; then \
-		make -f Makefile.gpu cuda; \
+		make -f Makefile.gpu all; \
 	else \
 		echo "Makefile.gpu not found - GPU acceleration not available"; \
 	fi
 
-all-gpu: all gpu
+geth-gpu: gpu
+	@echo "Building geth with GPU support..."
+	$(GORUN) build/ci.go install ./cmd/geth
+	@echo "Done building geth with GPU acceleration."
+	@echo "Run \"$(GOBIN)/geth\" to launch geth with GPU support."
+
+all-gpu: gpu all
 	@echo "Complete build with GPU acceleration finished"
 
 android:

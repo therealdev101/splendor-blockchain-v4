@@ -4,11 +4,22 @@ CC = gcc-9
 CUDA_PATH ?= /usr/local/cuda
 CUDA_ARCH ?= sm_89
 NVCC_FLAGS = -O3 -arch=$(CUDA_ARCH) -Xcompiler -fPIC -allow-unsupported-compiler -std=c++11
+
+# CUDA files
 CUDA_SRC = common/gpu/cuda_kernels.cu
 CUDA_OBJ = common/gpu/cuda_kernels.o
 CUDA_LIB = common/gpu/libcuda_kernels.so
 
-.PHONY: cuda clean check-cuda
+# OpenCL files
+OPENCL_SRC = common/gpu/opencl_kernels.c
+OPENCL_OBJ = common/gpu/opencl_kernels.o
+OPENCL_LIB = common/gpu/libopencl_kernels.so
+OPENCL_FLAGS = -O3 -fPIC -lOpenCL
+
+.PHONY: all cuda opencl clean check-cuda check-opencl
+
+# Build both libraries
+all: cuda opencl
 
 # Check CUDA installation
 check-cuda:
@@ -17,6 +28,13 @@ check-cuda:
 	@nvcc --version
 	@echo "CUDA Architecture: $(CUDA_ARCH)"
 
+# Check OpenCL installation
+check-opencl:
+	@echo "Checking OpenCL installation..."
+	@pkg-config --exists OpenCL || (echo "OpenCL development files not found" && exit 1)
+	@echo "OpenCL found"
+
+# Build CUDA library
 cuda: check-cuda $(CUDA_LIB)
 
 $(CUDA_OBJ): $(CUDA_SRC)
@@ -28,5 +46,17 @@ $(CUDA_LIB): $(CUDA_OBJ)
 	$(NVCC) -shared $(NVCC_FLAGS) $< -o $@
 	@echo "CUDA library built successfully: $(CUDA_LIB)"
 
+# Build OpenCL library
+opencl: check-opencl $(OPENCL_LIB)
+
+$(OPENCL_OBJ): $(OPENCL_SRC)
+	@echo "Compiling OpenCL kernels..."
+	$(CC) $(OPENCL_FLAGS) -c $< -o $@
+
+$(OPENCL_LIB): $(OPENCL_OBJ)
+	@echo "Linking OpenCL shared library..."
+	$(CC) -shared $(OPENCL_FLAGS) $< -o $@
+	@echo "OpenCL library built successfully: $(OPENCL_LIB)"
+
 clean:
-	rm -f $(CUDA_OBJ) $(CUDA_LIB) common/gpu/*.so
+	rm -f $(CUDA_OBJ) $(CUDA_LIB) $(OPENCL_OBJ) $(OPENCL_LIB) common/gpu/*.so common/gpu/*.o
