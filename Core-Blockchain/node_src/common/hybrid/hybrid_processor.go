@@ -2,6 +2,7 @@ package hybrid
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"time"
@@ -924,29 +925,56 @@ func (h *HybridProcessor) adjustLoadBalancing() {
 
 // ProcessTransactionsBatch processes a batch of transactions using the optimal strategy
 func (h *HybridProcessor) ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*TransactionResult, error)) error {
-	if len(txs) == 0 {
-		callback([]*TransactionResult{}, nil)
-		return nil
+	if callback == nil {
+		return errors.New("hybrid processor requires a callback")
 	}
 
 	start := time.Now()
+	var once sync.Once
+	safeCallback := func(results []*TransactionResult, err error) {
+		once.Do(func() {
+			callback(results, err)
+		})
+	}
+
+	if len(txs) == 0 {
+		safeCallback([]*TransactionResult{}, nil)
+		return nil
+	}
+
 	strategy, reason := h.determineProcessingStrategy(len(txs))
 
-	h.logDebug("Processing transaction batch", 
-		"size", len(txs), 
-		"strategy", strategy.String(), 
+	h.logDebug("Processing transaction batch",
+		"size", len(txs),
+		"strategy", strategy.String(),
 		"reason", reason)
 
+	var err error
 	switch strategy {
 	case ProcessingStrategyCPUOnly:
-		return h.processCPUOnly(txs, callback, start)
+		err = h.processCPUOnly(txs, safeCallback, start)
 	case ProcessingStrategyGPUOnly:
-		return h.processGPUOnly(txs, callback, start)
+		err = h.processGPUOnly(txs, safeCallback, start)
 	case ProcessingStrategyHybrid:
-		return h.processHybrid(txs, callback, start)
+		err = h.processHybrid(txs, safeCallback, start)
 	default:
-		return h.processCPUOnly(txs, callback, start)
+		err = h.processCPUOnly(txs, safeCallback, start)
 	}
+
+	if err != nil {
+		duration := time.Since(start)
+		h.logDebug("Hybrid batch failed",
+			"size", len(txs),
+			"strategy", strategy.String(),
+			"reason", reason,
+			"duration", duration,
+			"error", err)
+		h.logBatchCompletion(strategy, 0, 0, duration, 0, 0, 0)
+		safeCallback(nil, err)
+		return err
+	}
+
+	return nil
 }
 
 // GetStats returns current hybrid processor statistics
