@@ -138,6 +138,14 @@ type sealedResult struct {
 	nextAttempt time.Time
 }
 
+// hybridProcessor abstracts the hybrid GPU/CPU batch processor used by the miner.
+// Defining this as an interface enables lightweight instrumentation and test stubs
+// without requiring a full GPU stack to be initialised in unit tests.
+type hybridProcessor interface {
+	ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*hybrid.TransactionResult, error)) error
+	GetStats() hybrid.HybridStats
+}
+
 func blockPersistenceBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
 		attempt = 1
@@ -185,15 +193,22 @@ type worker struct {
 	isPoSA bool
 
 	// GPU/Hybrid processing integration
-	hybridProcessor   *hybrid.HybridProcessor
-	parallelProcessor *core.ParallelStateProcessor
-	aiLoadBalancer    *ai.AILoadBalancer
-	gpuEnabled        bool
-	batchThreshold    int
-	lastBatchSize     int
-	lastBatchTime     time.Duration
-	adaptiveBatching  bool
-	aiOptimization    bool
+	hybridProcessor    hybridProcessor
+	parallelProcessor  *core.ParallelStateProcessor
+	aiLoadBalancer     *ai.AILoadBalancer
+	gpuEnabled         bool
+	batchThreshold     int
+	lastBatchSize      int
+	lastBatchTime      time.Duration
+	adaptiveBatching   bool
+	aiOptimization     bool
+	massiveTxThreshold int
+
+	// Instrumentation helpers for massive-batch processing paths
+	massiveBatchHook       func(mode string, size int)
+	massiveGPUCounter      uint64
+	massiveFallbackCounter uint64
+	massiveLastBatchSize   uint64
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -282,9 +297,10 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     50000, // 50K threshold for GPU activation - 5x increase for 200K+ TPS
-		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
-		aiOptimization:     true,  // Enable AI-driven optimization
+		batchThreshold:     50000,  // 50K threshold for GPU activation - 5x increase for 200K+ TPS
+		adaptiveBatching:   true,   // Enable adaptive batch sizing for 1M+ transactions
+		aiOptimization:     true,   // Enable AI-driven optimization
+		massiveTxThreshold: 100000, // Default threshold for massive mempool offloading
 	}
 
 	// Initialize hybrid processor for GPU acceleration
@@ -1347,70 +1363,37 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 	// Estimate total transaction count for parallel processing decision
 	totalTxCount := w.estimateTransactionCount(pending)
 
-	// Use parallel processor for massive transaction batches (100K+ transactions)
-	if w.parallelProcessor != nil && totalTxCount >= 100000 {
-		log.Info("Using parallel processor for massive transaction batch",
+	// Use hybrid or parallel processors for massive transaction batches
+	threshold := w.massiveTxThreshold
+	if threshold <= 0 {
+		threshold = 100000
+	}
+	if totalTxCount >= threshold {
+		log.Info("Massive mempool detected",
 			"totalTxs", totalTxCount,
-			"threshold", 100000,
-			"parallelBatchSize", 100000)
+			"threshold", threshold)
 
-		// Combine all transactions for parallel processing
+		// Combine all transactions for accelerator processing
 		allTxs := make([]*types.Transaction, 0, totalTxCount)
 		for _, txList := range pending {
 			allTxs = append(allTxs, txList...)
 		}
 
 		if len(allTxs) > 0 {
-			// Create a temporary block for parallel processing
-			tempBlock := types.NewBlock(
-				w.current.header,
-				allTxs,
-				nil, // no uncles
-				nil, // no receipts yet
-				trie.NewStackTrie(nil),
-			)
-
-			batchStart := time.Now()
-
-			// Process ALL transactions with parallel processor
-			receipts, logs, gasUsed, err := w.parallelProcessor.ProcessParallel(
-				tempBlock,
-				w.current.state,
-				*w.chain.GetVMConfig(),
-			)
-
-			batchDuration := time.Since(batchStart)
-
-			if err != nil {
-				log.Warn("Massive parallel processing failed, falling back to standard processing",
-					"error", err,
-					"txCount", len(allTxs))
-				// Fall through to standard processing
-			} else {
-				// Parallel processing succeeded for massive batch
-				log.Info("MASSIVE parallel processing completed successfully",
-					"txCount", len(allTxs),
-					"gasUsed", gasUsed,
-					"duration", batchDuration,
-					"tps", float64(len(allTxs))/batchDuration.Seconds(),
-					"logCount", len(logs))
-
-				// Update current state with results
-				w.current.txs = append(w.current.txs, allTxs...)
-				w.current.receipts = append(w.current.receipts, receipts...)
-				w.current.tcount += len(allTxs)
-				w.current.header.GasUsed += gasUsed
-
-				// Ensure gasPool is initialized before using it
-				if w.current.gasPool == nil {
-					w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+			// Prefer GPU/hybrid acceleration when available
+			if w.hybridProcessor != nil && w.gpuEnabled {
+				if w.processMassiveTransactionsHybrid(allTxs, uncles, tstart) {
+					return
 				}
-				w.current.gasPool.SubGas(gasUsed)
+				log.Warn("Hybrid acceleration unavailable, evaluating CPU fallback",
+					"txCount", len(allTxs))
+			}
 
-				// Skip standard processing since parallel processing handled everything
-				// But we still need to commit the block with the processed transactions
-				w.commit(uncles, w.fullTaskHook, true, tstart)
-				return
+			// Fallback to CPU parallel processing when GPU path is not available
+			if w.parallelProcessor != nil {
+				if w.processMassiveTransactionsParallel(allTxs, uncles, tstart) {
+					return
+				}
 			}
 		}
 	}
@@ -1439,6 +1422,264 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 		}
 	}
 	w.commit(uncles, w.fullTaskHook, true, tstart)
+}
+
+// processMassiveTransactionsHybrid executes large transaction sets using the hybrid GPU/CPU
+// batcher. The function blocks until all GPU batches finish and returns true on success.
+func (w *worker) processMassiveTransactionsHybrid(allTxs []*types.Transaction, uncles []*types.Header, start time.Time) bool {
+	if w.hybridProcessor == nil || !w.gpuEnabled {
+		return false
+	}
+
+	log.Info("Using hybrid processor for massive transaction batch",
+		"txCount", len(allTxs),
+		"threshold", w.massiveTxThreshold,
+		"batchThreshold", w.batchThreshold)
+
+	snapshotID := w.current.state.Snapshot()
+	initialTxLen := len(w.current.txs)
+	initialReceiptLen := len(w.current.receipts)
+	initialTCount := w.current.tcount
+	initialGasUsed := w.current.header.GasUsed
+	originalGasPool := w.current.gasPool
+	var originalGas uint64
+	if originalGasPool != nil {
+		originalGas = originalGasPool.Gas()
+	}
+
+	if w.current.gasPool == nil {
+		availableGas := w.current.header.GasLimit - w.current.header.GasUsed
+		var gp core.GasPool
+		w.current.gasPool = gp.AddGas(availableGas)
+	}
+
+	batchSize := w.calculateOptimalBatchSize()
+	if batchSize <= 0 {
+		batchSize = w.batchThreshold
+	}
+	if batchSize <= 0 {
+		batchSize = 50000
+	}
+
+	type batchOutcome struct {
+		err       error
+		processed int
+		stop      bool
+	}
+
+	totalProcessed := 0
+	overallStart := time.Now()
+	stopProcessing := false
+
+	for offset := 0; offset < len(allTxs) && !stopProcessing; offset += batchSize {
+		end := offset + batchSize
+		if end > len(allTxs) {
+			end = len(allTxs)
+		}
+		batch := allTxs[offset:end]
+		if len(batch) == 0 {
+			break
+		}
+
+		outcomeCh := make(chan batchOutcome, 1)
+		batchStart := time.Now()
+
+		err := w.hybridProcessor.ProcessTransactionsBatch(batch, func(results []*hybrid.TransactionResult, err error) {
+			outcome := batchOutcome{}
+			if err != nil {
+				outcome.err = err
+				outcomeCh <- outcome
+				return
+			}
+
+			for i, result := range results {
+				if result == nil || i >= len(batch) {
+					continue
+				}
+				if !result.Processed || !result.Valid {
+					continue
+				}
+
+				tx := batch[i]
+				w.current.state.Prepare(tx.Hash(), w.current.tcount)
+				if _, commitErr := w.commitTransaction(tx, w.coinbase); commitErr != nil {
+					switch {
+					case errors.Is(commitErr, core.ErrGasLimitReached):
+						log.Debug("Gas limit reached during massive GPU batch",
+							"batchOffset", offset,
+							"processed", outcome.processed)
+						outcome.stop = true
+						outcomeCh <- outcome
+						return
+					default:
+						log.Warn("Transaction failed after GPU validation",
+							"hash", tx.Hash(),
+							"error", commitErr)
+						continue
+					}
+				}
+
+				outcome.processed++
+				w.current.tcount++
+			}
+
+			outcomeCh <- outcome
+		})
+		if err != nil {
+			log.Warn("Failed to submit massive GPU batch",
+				"error", err,
+				"batchOffset", offset,
+				"batchSize", len(batch))
+			w.recordMassiveBatch("gpu-failed", len(allTxs))
+			w.revertMassiveBatch(snapshotID, initialTxLen, initialReceiptLen, initialTCount, initialGasUsed, originalGasPool, originalGas)
+			return false
+		}
+
+		outcome := <-outcomeCh
+		batchDuration := time.Since(batchStart)
+		w.updateBatchPerformance(len(batch), batchDuration)
+
+		if outcome.err != nil {
+			log.Warn("Massive GPU batch processing failed",
+				"error", outcome.err,
+				"batchOffset", offset,
+				"batchSize", len(batch))
+			w.recordMassiveBatch("gpu-failed", len(allTxs))
+			w.revertMassiveBatch(snapshotID, initialTxLen, initialReceiptLen, initialTCount, initialGasUsed, originalGasPool, originalGas)
+			return false
+		}
+
+		totalProcessed += outcome.processed
+		if outcome.stop {
+			stopProcessing = true
+		}
+	}
+
+	if totalProcessed == 0 {
+		log.Warn("Hybrid processing yielded no transactions, falling back to CPU",
+			"txCount", len(allTxs))
+		w.recordMassiveBatch("gpu-failed", len(allTxs))
+		w.revertMassiveBatch(snapshotID, initialTxLen, initialReceiptLen, initialTCount, initialGasUsed, originalGasPool, originalGas)
+		return false
+	}
+
+	log.Info("Massive hybrid processing completed successfully",
+		"processed", totalProcessed,
+		"duration", time.Since(overallStart))
+
+	w.recordMassiveBatch("gpu", totalProcessed)
+	w.commit(uncles, w.fullTaskHook, true, start)
+	return true
+}
+
+// processMassiveTransactionsParallel executes large transaction sets using the parallel
+// state processor. The function returns true if the transactions were handled successfully.
+func (w *worker) processMassiveTransactionsParallel(allTxs []*types.Transaction, uncles []*types.Header, start time.Time) bool {
+	if w.parallelProcessor == nil {
+		return false
+	}
+
+	log.Info("Using parallel processor for massive transaction batch",
+		"txCount", len(allTxs),
+		"threshold", w.massiveTxThreshold)
+
+	tempBlock := types.NewBlock(
+		w.current.header,
+		allTxs,
+		nil,
+		nil,
+		trie.NewStackTrie(nil),
+	)
+
+	batchStart := time.Now()
+	receipts, logs, gasUsed, err := w.parallelProcessor.ProcessParallel(
+		tempBlock,
+		w.current.state,
+		*w.chain.GetVMConfig(),
+	)
+	batchDuration := time.Since(batchStart)
+
+	if err != nil {
+		log.Warn("Massive parallel processing failed",
+			"error", err,
+			"txCount", len(allTxs))
+		return false
+	}
+
+	log.Info("MASSIVE parallel processing completed successfully",
+		"txCount", len(allTxs),
+		"gasUsed", gasUsed,
+		"duration", batchDuration,
+		"tps", float64(len(allTxs))/batchDuration.Seconds(),
+		"logCount", len(logs))
+
+	w.current.txs = append(w.current.txs, allTxs...)
+	w.current.receipts = append(w.current.receipts, receipts...)
+	w.current.tcount += len(allTxs)
+	w.current.header.GasUsed += gasUsed
+
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+	}
+	w.current.gasPool.SubGas(gasUsed)
+
+	w.recordMassiveBatch("parallel", len(allTxs))
+	w.commit(uncles, w.fullTaskHook, true, start)
+	return true
+}
+
+// recordMassiveBatch captures instrumentation for large-batch processing decisions.
+func (w *worker) recordMassiveBatch(mode string, size int) {
+	if size < 0 {
+		size = 0
+	}
+	atomic.StoreUint64(&w.massiveLastBatchSize, uint64(size))
+
+	switch mode {
+	case "gpu":
+		atomic.AddUint64(&w.massiveGPUCounter, 1)
+	case "parallel", "gpu-failed":
+		atomic.AddUint64(&w.massiveFallbackCounter, 1)
+	}
+
+	if hook := w.massiveBatchHook; hook != nil {
+		hook(mode, size)
+	}
+}
+
+// revertMassiveBatch restores the worker state after a failed accelerator attempt.
+func (w *worker) revertMassiveBatch(snapshotID int, txLen, receiptLen, tcount int, gasUsed uint64, originalGasPool *core.GasPool, originalGas uint64) {
+	w.current.state.RevertToSnapshot(snapshotID)
+	if txLen < len(w.current.txs) {
+		w.current.txs = w.current.txs[:txLen]
+	}
+	if receiptLen < len(w.current.receipts) {
+		w.current.receipts = w.current.receipts[:receiptLen]
+	}
+	w.current.tcount = tcount
+	w.current.header.GasUsed = gasUsed
+
+	if originalGasPool != nil {
+		w.current.gasPool = originalGasPool
+		*w.current.gasPool = core.GasPool(originalGas)
+	} else {
+		w.current.gasPool = nil
+	}
+}
+
+// massiveGPUCount returns the number of massive batches processed via GPU/hybrid acceleration.
+func (w *worker) massiveGPUCount() uint64 {
+	return atomic.LoadUint64(&w.massiveGPUCounter)
+}
+
+// massiveFallbackCount returns the number of times CPU fallbacks handled a massive batch.
+func (w *worker) massiveFallbackCount() uint64 {
+	return atomic.LoadUint64(&w.massiveFallbackCounter)
+}
+
+// massiveLastBatchSize returns the size of the most recent massive batch attempt.
+func (w *worker) massiveLastBatchSize() uint64 {
+	return atomic.LoadUint64(&w.massiveLastBatchSize)
 }
 
 // commit runs any post-transaction state modifications, assembles the final block

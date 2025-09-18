@@ -26,6 +26,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hybrid"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -521,4 +522,77 @@ func testAdjustInterval(t *testing.T, chainConfig *params.ChainConfig, engine co
 	case <-time.NewTimer(time.Second).C:
 		t.Error("interval reset timeout")
 	}
+}
+
+func TestMassiveMempoolTriggersHybridProcessing(t *testing.T) {
+	chainConfig := new(params.ChainConfig)
+	*chainConfig = *params.AllEthashProtocolChanges
+	chainConfig.LondonBlock = big.NewInt(0)
+
+	engine := ethash.NewFaker()
+	w, backend := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	stubHybrid := &testHybridProcessor{}
+	w.hybridProcessor = stubHybrid
+	w.gpuEnabled = true
+	w.parallelProcessor = nil
+	w.massiveTxThreshold = 10
+
+	var gpuBatches int32
+	w.massiveBatchHook = func(mode string, size int) {
+		if mode == "gpu" {
+			atomic.AddInt32(&gpuBatches, 1)
+		}
+	}
+
+	for i := 0; i < 12; i++ {
+		if err := backend.txPool.AddLocal(backend.newRandomTx(false)); err != nil {
+			t.Fatalf("failed to add local tx: %v", err)
+		}
+	}
+
+	w.commitNewWork(nil, false, time.Now().Unix())
+
+	if stubHybrid.CallCount() == 0 {
+		t.Fatalf("expected hybrid processor to execute for massive mempool")
+	}
+	if atomic.LoadInt32(&gpuBatches) == 0 {
+		t.Fatalf("expected GPU batch hook to record execution")
+	}
+	if count := w.massiveGPUCount(); count == 0 {
+		t.Fatalf("expected massive GPU counter to increment, got %d", count)
+	}
+	if size := w.massiveLastBatchSize(); size == 0 {
+		t.Fatalf("expected massive batch size to be recorded, got %d", size)
+	}
+}
+
+type testHybridProcessor struct {
+	calls int32
+}
+
+func (p *testHybridProcessor) ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*hybrid.TransactionResult, error)) error {
+	atomic.AddInt32(&p.calls, 1)
+	results := make([]*hybrid.TransactionResult, len(txs))
+	for i, tx := range txs {
+		results[i] = &hybrid.TransactionResult{
+			Hash:      tx.Hash(),
+			Valid:     true,
+			Processed: true,
+		}
+	}
+	callback(results, nil)
+	return nil
+}
+
+func (p *testHybridProcessor) GetStats() hybrid.HybridStats {
+	return hybrid.HybridStats{
+		GPUProcessed:   1,
+		GPUUtilization: 0.5,
+	}
+}
+
+func (p *testHybridProcessor) CallCount() int {
+	return int(atomic.LoadInt32(&p.calls))
 }
