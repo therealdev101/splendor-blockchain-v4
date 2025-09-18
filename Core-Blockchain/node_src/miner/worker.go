@@ -884,7 +884,6 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 	if w.gpuEnabled && w.hybridProcessor != nil {
 		// Calculate optimal batch size based on performance
 		optimalBatchSize := w.calculateOptimalBatchSize()
-		tempTxs := txs
 		totalGPUProcessed := 0
 		batchNumber := 1
 		
@@ -901,7 +900,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			
 			// Collect up to optimal batch size transactions for GPU processing
 			for len(txBatch) < optimalBatchSize {
-				tx := tempTxs.Peek()
+				tx := txs.Peek()
 				if tx == nil {
 					break
 				}
@@ -909,27 +908,23 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				// Basic validation before adding to batch
 				from, _ := types.Sender(w.current.signer, tx)
 				if tx.Protected() && !w.chainConfig.IsEIP155(w.current.header.Number) {
-					tempTxs.Pop()
+					txs.Pop()
 					continue
 				}
 				if w.isPoSA {
 					if err := w.posa.ValidateTx(from, tx, w.current.header, w.current.state); err != nil {
-						tempTxs.Pop()
+						txs.Pop()
 						continue
 					}
 				}
 				
 				txBatch = append(txBatch, tx)
-				tempTxs.Shift()
+				txs.Shift()
 			}
 			
 			// Break if we don't have enough transactions for a meaningful GPU batch
 			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
 				log.Debug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
-				// Put transactions back for sequential processing
-				for i := len(txBatch) - 1; i >= 0; i-- {
-					tempTxs.Push(txBatch[i])
-				}
 				break
 			}
 			
@@ -964,10 +959,6 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			
 			if err != nil {
 				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "batchNumber", batchNumber, "error", err)
-				// Put transactions back for sequential processing
-				for i := len(txBatch) - 1; i >= 0; i-- {
-					tempTxs.Push(txBatch[i])
-				}
 				break
 			} else {
 				// GPU batch processing completed successfully
@@ -982,9 +973,6 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				break
 			}
 		}
-		
-		// Update txs iterator to remaining transactions after GPU processing
-		txs = tempTxs
 		
 		if totalGPUProcessed > 0 {
 			log.Info("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
