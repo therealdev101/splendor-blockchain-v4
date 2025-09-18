@@ -24,6 +24,7 @@ import (
 // CUDA function declarations (implemented in cuda_kernels.cu)
 int cuda_init_device();
 int cuda_process_transactions(void* txs, int count, void* results);
+int cuda_process_transactions_full(void* txs, void* state_data, void* access_lists, int count, void* results);
 int cuda_process_hashes(void* hashes, int count, void* results);
 int cuda_verify_signatures(void* sigs, void* msgs, void* keys, int count, void* results);
 void cuda_cleanup();
@@ -38,6 +39,7 @@ void cleanupCUDA();
 // OpenCL function declarations (implemented in opencl_kernels.c)
 int initOpenCL();
 int processTxBatchOpenCL(void* txData, int txCount, void* results);
+int processTxBatchOpenCLFull(void* txData, void* stateData, void* accessLists, int txCount, void* results);
 int processHashesOpenCL(void* hashes, int count, void* results);
 int verifySignaturesOpenCL(void* signatures, int count, void* results);
 void cleanupOpenCL();
@@ -919,7 +921,7 @@ func (p *GPUProcessor) processSignaturesCPU(batch *SignatureBatch) {
 	}
 }
 
-// processTransactionsGPU processes transactions using GPU
+// processTransactionsGPU processes transactions using GPU with full execution context
 func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	// GPU ACTIVATION LOG - This proves GPU is processing real transactions
 	log.Info("🚀 GPU TRANSACTION PROCESSING ACTIVATED", 
@@ -936,7 +938,7 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"deviceCount", p.deviceCount,
 	)
 	
-	log.Debug("Starting GPU transaction processing", 
+	log.Debug("Starting enhanced GPU transaction processing", 
 		"batchSize", len(batch.Transactions),
 		"gpuType", p.gpuType,
 	)
@@ -952,28 +954,59 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		}
 	}()
 
-	// Pack input into fixed 1024-byte slots per tx
-	log.Trace("Preparing transaction data for GPU processing", "txCount", len(batch.Transactions))
+	count := len(batch.Transactions)
 	dataStart := time.Now()
-	in := p.prepareTransactionData(batch.Transactions)
-	dataPreparationTime := time.Since(dataStart)
-	defer p.memoryPool.Put(in)
 	
-	log.Debug("Transaction data preparation completed", 
-		"inputSize", len(in),
+	// Prepare transaction data (1KB per transaction)
+	log.Trace("Preparing transaction data for GPU processing", "txCount", count)
+	txData := p.prepareTransactionData(batch.Transactions)
+	defer p.memoryPool.Put(txData)
+	
+	// Prepare state snapshots (2KB per transaction)
+	log.Trace("Preparing state snapshots for GPU processing")
+	stateData := p.prepareStateSnapshots(batch.Transactions)
+	defer func() {
+		if stateData != nil {
+			p.memoryPool.Put(stateData)
+		}
+	}()
+	
+	// Prepare access lists (512B per transaction)
+	log.Trace("Preparing access lists for GPU processing")
+	accessLists := p.prepareAccessLists(batch.Transactions)
+	defer func() {
+		if accessLists != nil {
+			p.memoryPool.Put(accessLists)
+		}
+	}()
+	
+	dataPreparationTime := time.Since(dataStart)
+	log.Debug("Enhanced transaction data preparation completed", 
+		"txDataSize", len(txData),
+		"stateDataSize", func() int {
+			if stateData != nil {
+				return len(stateData)
+			}
+			return 0
+		}(),
+		"accessListsSize", func() int {
+			if accessLists != nil {
+				return len(accessLists)
+			}
+			return 0
+		}(),
 		"preparationTime", dataPreparationTime,
 	)
 
-	count := len(batch.Transactions)
-	// Output buffer: 64 bytes per tx: [0]=valid, [1]=checksum, [2..9]=gas (8 bytes LE), rest reserved
-	out := make([]byte, count*64)
-	log.Trace("Allocated transaction output buffer", "size", len(out))
+	// Enhanced output buffer: 128 bytes per transaction
+	out := make([]byte, count*128)
+	log.Trace("Allocated enhanced transaction output buffer", "size", len(out))
 
-	// Process on GPU
-	log.Debug("Executing GPU transaction computation", 
+	// Process on GPU with full execution context
+	log.Debug("Executing enhanced GPU transaction computation", 
 		"gpuType", p.gpuType,
 		"txCount", count,
-		"inputBufferSize", len(in),
+		"inputBufferSize", len(txData),
 		"outputBufferSize", len(out),
 	)
 	
@@ -981,24 +1014,48 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	var result int
 	switch p.gpuType {
 	case GPUTypeCUDA:
-		log.Trace("Calling CUDA transaction processing kernel")
-		result = int(C.cuda_process_transactions(
-			unsafe.Pointer(&in[0]),
+		log.Trace("Calling enhanced CUDA transaction processing kernel")
+		result = int(C.cuda_process_transactions_full(
+			unsafe.Pointer(&txData[0]),
+			func() unsafe.Pointer {
+				if stateData != nil {
+					return unsafe.Pointer(&stateData[0])
+				}
+				return nil
+			}(),
+			func() unsafe.Pointer {
+				if accessLists != nil {
+					return unsafe.Pointer(&accessLists[0])
+				}
+				return nil
+			}(),
 			C.int(count),
 			unsafe.Pointer(&out[0]),
 		))
-		log.Debug("CUDA transaction processing completed", 
+		log.Debug("Enhanced CUDA transaction processing completed", 
 			"result", result,
 			"duration", time.Since(gpuStart),
 		)
 	case GPUTypeOpenCL:
-		log.Trace("Calling OpenCL transaction processing kernel")
-		result = int(C.processTxBatchOpenCL(
-			unsafe.Pointer(&in[0]),
+		log.Trace("Calling enhanced OpenCL transaction processing kernel")
+		result = int(C.processTxBatchOpenCLFull(
+			unsafe.Pointer(&txData[0]),
+			func() unsafe.Pointer {
+				if stateData != nil {
+					return unsafe.Pointer(&stateData[0])
+				}
+				return nil
+			}(),
+			func() unsafe.Pointer {
+				if accessLists != nil {
+					return unsafe.Pointer(&accessLists[0])
+				}
+				return nil
+			}(),
 			C.int(count),
 			unsafe.Pointer(&out[0]),
 		))
-		log.Debug("OpenCL transaction processing completed", 
+		log.Debug("Enhanced OpenCL transaction processing completed", 
 			"result", result,
 			"duration", time.Since(gpuStart),
 		)
@@ -1007,7 +1064,7 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	gpuProcessingTime := time.Since(gpuStart)
 
 	if result != 0 {
-		log.Warn("GPU transaction processing failed, falling back to CPU", 
+		log.Warn("Enhanced GPU transaction processing failed, falling back to CPU", 
 			"error", result,
 			"gpuType", p.gpuType,
 			"batchSize", count,
@@ -1017,42 +1074,63 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		return
 	}
 
-	// Convert results
-	log.Trace("Converting GPU transaction results")
+	// Convert enhanced results
+	log.Trace("Converting enhanced GPU transaction results")
 	conversionStart := time.Now()
 	validCount := 0
+	successCount := 0
+	revertCount := 0
+	outOfGasCount := 0
+	invalidCount := 0
+	
 	for i := 0; i < count; i++ {
-		offset := i * 64
-
-		// Interpret result layout based on backend:
-		// - CUDA:   [0]=valid, [1]=checksum, [2..9]=gas (LE)
-		// - OpenCL: [0..31]=hash, [32]=valid, (no gas written)
-		var valid bool
-		var gas uint64
-		switch p.gpuType {
-		case GPUTypeOpenCL:
-			if len(out) >= offset+33 {
-				valid = out[offset+32] != 0
-			}
-			// No gas provided by OpenCL kernel, will fall back to tx.Gas()
-		default:
-			if len(out) >= offset+1 {
-				valid = out[offset] != 0
-			}
-			if len(out) >= offset+10 {
-				gas = binary.LittleEndian.Uint64(out[offset+2 : offset+10])
-			}
-		}
+		offset := i * 128
 
 		if batch.Results[i] == nil {
 			batch.Results[i] = &TxResult{}
 		}
-		batch.Results[i].Hash = batch.Transactions[i].Hash()
+		
+		// Enhanced result structure:
+		// [0-31]: transaction hash
+		// [32]: validity flag
+		// [33]: execution status (0=success, 1=revert, 2=out_of_gas, 3=invalid)
+		// [34-41]: gas used (8 bytes LE)
+		// [42-73]: return data hash (32 bytes)
+		// [74-105]: revert reason hash (32 bytes)
+		
+		// Extract transaction hash
+		var txHash common.Hash
+		copy(txHash[:], out[offset:offset+32])
+		batch.Results[i].Hash = txHash
+		
+		// Extract validity and execution status
+		valid := out[offset+32] != 0
+		execStatus := out[offset+33]
+		
 		batch.Results[i].Valid = valid
-		if gas > 0 {
-			batch.Results[i].GasUsed = gas
+		
+		// Extract gas used
+		gasUsed := binary.LittleEndian.Uint64(out[offset+34 : offset+42])
+		if gasUsed > 0 {
+			batch.Results[i].GasUsed = gasUsed
 		} else {
 			batch.Results[i].GasUsed = batch.Transactions[i].Gas()
+		}
+		
+		// Set error based on execution status
+		switch execStatus {
+		case 0: // success
+			batch.Results[i].Error = nil
+			successCount++
+		case 1: // revert
+			batch.Results[i].Error = errors.New("execution reverted")
+			revertCount++
+		case 2: // out of gas
+			batch.Results[i].Error = errors.New("out of gas")
+			outOfGasCount++
+		case 3: // invalid
+			batch.Results[i].Error = errors.New("invalid transaction")
+			invalidCount++
 		}
 		
 		if valid {
@@ -1068,11 +1146,14 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		tps = float64(count) / totalTime.Seconds()
 	}
 	
-	// GPU PERFORMANCE LOG - This shows actual GPU processing performance
-	log.Info("✅ GPU TRANSACTION BATCH COMPLETED", 
+	// Enhanced GPU PERFORMANCE LOG
+	log.Info("✅ ENHANCED GPU TRANSACTION BATCH COMPLETED", 
 		"batchSize", count,
 		"validTransactions", validCount,
-		"invalidTransactions", count-validCount,
+		"successfulExecutions", successCount,
+		"revertedExecutions", revertCount,
+		"outOfGasExecutions", outOfGasCount,
+		"invalidTransactions", invalidCount,
 		"gpuType", p.gpuType,
 		"batchTPS", tps,
 		"gpuKernelTime", gpuProcessingTime,
@@ -1080,36 +1161,45 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
 	)
 	
-	// Save performance data to files
-	logging.LogGPU("INFO", "GPU TRANSACTION BATCH COMPLETED", 
+	// Save enhanced performance data to files
+	logging.LogGPU("INFO", "ENHANCED GPU TRANSACTION BATCH COMPLETED", 
 		"batchSize", count,
 		"validTransactions", validCount,
-		"invalidTransactions", count-validCount,
+		"successfulExecutions", successCount,
+		"revertedExecutions", revertCount,
+		"outOfGasExecutions", outOfGasCount,
+		"invalidTransactions", invalidCount,
 		"gpuType", p.gpuType,
 		"batchTPS", tps,
 		"gpuKernelTime", gpuProcessingTime,
 		"totalProcessingTime", totalTime,
 	)
 	
-	logging.LogPerformance("INFO", "BATCH PERFORMANCE METRICS", 
+	logging.LogPerformance("INFO", "ENHANCED BATCH PERFORMANCE METRICS", 
 		"batchSize", count,
 		"batchTPS", tps,
-		"processingMode", "GPU",
+		"processingMode", "Enhanced GPU",
 		"kernelTime", gpuProcessingTime,
 		"totalTime", totalTime,
 	)
 	
-	logging.LogTransaction("INFO", "TRANSACTION BATCH PROCESSED", 
+	logging.LogTransaction("INFO", "ENHANCED TRANSACTION BATCH PROCESSED", 
 		"batchSize", count,
 		"validTransactions", validCount,
-		"invalidTransactions", count-validCount,
-		"processingMode", "GPU",
+		"successfulExecutions", successCount,
+		"revertedExecutions", revertCount,
+		"outOfGasExecutions", outOfGasCount,
+		"invalidTransactions", invalidCount,
+		"processingMode", "Enhanced GPU",
 	)
 	
-	log.Debug("GPU transaction processing completed successfully", 
+	log.Debug("Enhanced GPU transaction processing completed successfully", 
 		"batchSize", count,
 		"validTransactions", validCount,
-		"invalidTransactions", count-validCount,
+		"successfulExecutions", successCount,
+		"revertedExecutions", revertCount,
+		"outOfGasExecutions", outOfGasCount,
+		"invalidTransactions", invalidCount,
 		"gpuType", p.gpuType,
 		"dataPreparationTime", dataPreparationTime,
 		"gpuProcessingTime", gpuProcessingTime,
@@ -1343,6 +1433,231 @@ func (p *GPUProcessor) prepareTransactionData(txs []*types.Transaction) []byte {
 		"totalMarshalledBytes", totalMarshalledBytes,
 		"finalBufferSize", len(data),
 		"marshalTime", marshalTime,
+		"totalPrepTime", time.Since(memStart),
+	)
+	
+	return data
+}
+
+// prepareStateSnapshots prepares state snapshot data for GPU processing
+func (p *GPUProcessor) prepareStateSnapshots(txs []*types.Transaction) []byte {
+	log.Trace("Starting state snapshot preparation", "txCount", len(txs))
+	
+	// Kernels expect fixed 2048 bytes per transaction for state data
+	const slot = 2048
+	count := len(txs)
+	total := count * slot
+	
+	log.Debug("State snapshot preparation parameters", 
+		"slotSize", slot,
+		"txCount", count,
+		"totalBufferSize", total,
+	)
+
+	memStart := time.Now()
+	buf := p.memoryPool.Get().([]byte)
+	memGetTime := time.Since(memStart)
+	
+	log.Trace("Retrieved state buffer from memory pool", 
+		"bufferCapacity", cap(buf),
+		"requiredSize", total,
+		"memGetTime", memGetTime,
+	)
+	
+	if cap(buf) < total {
+		log.Debug("Memory pool buffer too small, allocating new state buffer", 
+			"poolBufferCap", cap(buf),
+			"requiredSize", total,
+		)
+		allocStart := time.Now()
+		buf = make([]byte, total)
+		allocTime := time.Since(allocStart)
+		log.Debug("Allocated new state buffer", 
+			"size", total,
+			"allocTime", allocTime,
+		)
+	}
+	data := buf[:total]
+
+	// For now, we'll create simplified state snapshots
+	// In a full implementation, this would include:
+	// - Account balances and nonces
+	// - Contract storage states
+	// - Code hashes
+	// - State root information
+	
+	prepStart := time.Now()
+	for i, tx := range txs {
+		base := i * slot
+		
+		// Simplified state snapshot structure:
+		// [0-31]: sender address (20 bytes + 12 padding)
+		// [32-63]: recipient address (20 bytes + 12 padding) 
+		// [64-95]: sender balance (32 bytes)
+		// [96-127]: sender nonce (32 bytes)
+		// [128-159]: recipient balance (32 bytes)
+		// [160-191]: gas price (32 bytes)
+		// [192-223]: block number (32 bytes)
+		// [224-255]: block timestamp (32 bytes)
+		// [256-2047]: reserved for contract storage/code
+		
+		// Extract sender address (simplified - would need proper state access)
+		if tx.To() != nil {
+			// Copy recipient address
+			copy(data[base+32:base+52], tx.To().Bytes())
+		}
+		
+		// Set simplified values (in production, these would come from state DB)
+		// Gas price
+		gasPrice := tx.GasPrice()
+		if gasPrice != nil {
+			gasPriceBytes := gasPrice.Bytes()
+			if len(gasPriceBytes) <= 32 {
+				copy(data[base+160+32-len(gasPriceBytes):base+192], gasPriceBytes)
+			}
+		}
+		
+		// Transaction value
+		value := tx.Value()
+		if value != nil {
+			valueBytes := value.Bytes()
+			if len(valueBytes) <= 32 {
+				copy(data[base+64+32-len(valueBytes):base+96], valueBytes)
+			}
+		}
+		
+		// Nonce
+		nonce := tx.Nonce()
+		binary.BigEndian.PutUint64(data[base+96+24:base+104], nonce)
+	}
+	prepTime := time.Since(prepStart)
+	
+	log.Debug("State snapshot preparation completed", 
+		"processedTxs", count,
+		"finalBufferSize", len(data),
+		"prepTime", prepTime,
+		"totalPrepTime", time.Since(memStart),
+	)
+	
+	return data
+}
+
+// prepareAccessLists prepares access list data for GPU processing
+func (p *GPUProcessor) prepareAccessLists(txs []*types.Transaction) []byte {
+	log.Trace("Starting access list preparation", "txCount", len(txs))
+	
+	// Kernels expect fixed 512 bytes per transaction for access lists
+	const slot = 512
+	count := len(txs)
+	total := count * slot
+	
+	log.Debug("Access list preparation parameters", 
+		"slotSize", slot,
+		"txCount", count,
+		"totalBufferSize", total,
+	)
+
+	memStart := time.Now()
+	buf := p.memoryPool.Get().([]byte)
+	memGetTime := time.Since(memStart)
+	
+	log.Trace("Retrieved access list buffer from memory pool", 
+		"bufferCapacity", cap(buf),
+		"requiredSize", total,
+		"memGetTime", memGetTime,
+	)
+	
+	if cap(buf) < total {
+		log.Debug("Memory pool buffer too small, allocating new access list buffer", 
+			"poolBufferCap", cap(buf),
+			"requiredSize", total,
+		)
+		allocStart := time.Now()
+		buf = make([]byte, total)
+		allocTime := time.Since(allocStart)
+		log.Debug("Allocated new access list buffer", 
+			"size", total,
+			"allocTime", allocTime,
+		)
+	}
+	data := buf[:total]
+
+	prepStart := time.Now()
+	accessListCount := 0
+	
+	for i, tx := range txs {
+		base := i * slot
+		offset := 0
+		
+		// Get access list from transaction
+		accessList := tx.AccessList()
+		if len(accessList) > 0 {
+			accessListCount++
+			
+			// Access list structure:
+			// [0-1]: number of addresses (2 bytes)
+			// [2-3]: total storage keys (2 bytes)
+			// [4+]: address entries, each followed by storage keys
+			//   - Address: 20 bytes
+			//   - Storage key count: 2 bytes  
+			//   - Storage keys: 32 bytes each
+			
+			if offset+4 < slot {
+				// Write number of addresses
+				binary.LittleEndian.PutUint16(data[base+offset:base+offset+2], uint16(len(accessList)))
+				offset += 2
+				
+				// Count total storage keys
+				totalKeys := 0
+				for _, entry := range accessList {
+					totalKeys += len(entry.StorageKeys)
+				}
+				binary.LittleEndian.PutUint16(data[base+offset:base+offset+2], uint16(totalKeys))
+				offset += 2
+				
+				// Write access list entries
+				for _, entry := range accessList {
+					// Write address (20 bytes)
+					if offset+20 < slot {
+						copy(data[base+offset:base+offset+20], entry.Address.Bytes())
+						offset += 20
+					} else {
+						break
+					}
+					
+					// Write storage key count (2 bytes)
+					if offset+2 < slot {
+						binary.LittleEndian.PutUint16(data[base+offset:base+offset+2], uint16(len(entry.StorageKeys)))
+						offset += 2
+					} else {
+						break
+					}
+					
+					// Write storage keys (32 bytes each)
+					for _, key := range entry.StorageKeys {
+						if offset+32 < slot {
+							copy(data[base+offset:base+offset+32], key.Bytes())
+							offset += 32
+						} else {
+							break
+						}
+					}
+					
+					if offset >= slot-64 { // Leave some buffer space
+						break
+					}
+				}
+			}
+		}
+		// If no access list, the slot remains zeroed
+	}
+	prepTime := time.Since(prepStart)
+	
+	log.Debug("Access list preparation completed", 
+		"processedTxs", count,
+		"txsWithAccessLists", accessListCount,
+		"finalBufferSize", len(data),
+		"prepTime", prepTime,
 		"totalPrepTime", time.Since(memStart),
 	)
 	
