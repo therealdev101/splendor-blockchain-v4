@@ -45,9 +45,9 @@ import (
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 
 	// GPU and AI acceleration imports
-	"github.com/ethereum/go-ethereum/common/hybrid"
 	"github.com/ethereum/go-ethereum/common/ai"
 	"github.com/ethereum/go-ethereum/common/gpu"
+	"github.com/ethereum/go-ethereum/common/hybrid"
 
 	"gopkg.in/urfave/cli.v1"
 )
@@ -421,7 +421,7 @@ func startNode(ctx *cli.Context, stack *node.Node, backend ethapi.Backend) {
 	}
 }
 
-	// initializeGPUAcceleration initializes GPU and AI acceleration if enabled
+// initializeGPUAcceleration initializes GPU and AI acceleration if enabled
 func initializeGPUAcceleration(ctx *cli.Context) {
 	// Helper parsers from environment variables
 	getEnvBool := func(key string, def bool) bool {
@@ -505,20 +505,20 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 	// Create hybrid processor configuration from environment
 	hybridConfig := &hybrid.HybridConfig{
 		EnableGPU:             true,
-		GPUThreshold:          getEnvInt("GPU_THRESHOLD", 1000),       // default aligned with .env
-		CPUGPURatio:           getEnvFloat("CPU_GPU_RATIO", 0.85),
+		GPUThreshold:          getEnvInt("GPU_THRESHOLD", 500), // default aligned with aggressive GPU plan
+		CPUGPURatio:           getEnvFloat("CPU_GPU_RATIO", 0.90),
 		AdaptiveLoadBalancing: getEnvBool("ADAPTIVE_LOAD_BALANCING", true),
 		PerformanceMonitoring: getEnvBool("PERFORMANCE_MONITORING", true),
-		MaxCPUUtilization:     getEnvFloat("MAX_CPU_UTILIZATION", 0.85),
-		MaxGPUUtilization:     getEnvFloat("MAX_GPU_UTILIZATION", 0.95),
-		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 8000000),
+		MaxCPUUtilization:     getEnvFloat("MAX_CPU_UTILIZATION", 0.95),
+		MaxGPUUtilization:     getEnvFloat("MAX_GPU_UTILIZATION", 0.98),
+		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 500000),
 		GPUConfig: &gpu.GPUConfig{
 			PreferredGPUType: gpuType,
-			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 80000),
-			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 17179869184), // 16GB default
-			HashWorkers:      getEnvInt("GPU_HASH_WORKERS", 24),
-			SignatureWorkers: getEnvInt("GPU_SIGNATURE_WORKERS", 24),
-			TxWorkers:        getEnvInt("GPU_TX_WORKERS", 24),
+			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
+			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 15032385536), // 14GB blockchain allocation
+			HashWorkers:      getEnvInt("GPU_HASH_WORKERS", 80),
+			SignatureWorkers: getEnvInt("GPU_SIGNATURE_WORKERS", 80),
+			TxWorkers:        getEnvInt("GPU_TX_WORKERS", 80),
 			EnablePipelining: getEnvBool("GPU_ENABLE_PIPELINING", true),
 		},
 	}
@@ -534,7 +534,7 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 		// Get AI configuration with proper defaults
 		llmEndpoint := strings.TrimSpace(os.Getenv("LLM_ENDPOINT"))
 		llmModel := strings.TrimSpace(os.Getenv("LLM_MODEL"))
-		
+
 		// Use default configuration if environment variables are empty
 		defaultConfig := ai.DefaultAIConfig()
 		if llmEndpoint == "" {
@@ -543,7 +543,7 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 		if llmModel == "" {
 			llmModel = defaultConfig.LLMModel
 		}
-		
+
 		aiConfig := &ai.AIConfig{
 			LLMEndpoint:         llmEndpoint,
 			LLMModel:            llmModel,

@@ -107,9 +107,9 @@ check_item "Chain ID 6546" "grep '\"chainId\": 6546' ./genesis.json"
 check_item ".env file exists" "test -f ./.env"
 check_item "GPU enabled in config" "grep 'ENABLE_GPU=true' ./.env"
 check_item "500B gas limit in env" "grep 'GAS_LIMIT=500000000000' ./.env"
-check_item "RTX 4000 batch size (80K)" "grep 'GPU_MAX_BATCH_SIZE=80000' ./.env"
-check_item "RTX 4000 memory (16GB)" "grep 'GPU_MAX_MEMORY_USAGE=17179869184' ./.env"
-check_item "8M TPS target" "grep 'THROUGHPUT_TARGET=8000000' ./.env"
+check_item "RTX 4000 batch size (800K)" "grep 'GPU_MAX_BATCH_SIZE=800000' ./.env"
+check_item "RTX 4000 memory (14GB blockchain allocation)" "grep 'GPU_MAX_MEMORY_USAGE=15032385536' ./.env"
+check_item "500K TPS target" "grep 'THROUGHPUT_TARGET=500000' ./.env"
 
 echo -e "\n${PURPLE}=== 4. GPU ACCELERATION ===${NC}"
 
