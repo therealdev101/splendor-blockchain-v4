@@ -192,6 +192,8 @@ type worker struct {
 	batchThreshold    int
 	lastBatchSize     int
 	lastBatchTime     time.Duration
+	lastDispatchTime  time.Duration
+	lastExecutorTime  time.Duration
 	adaptiveBatching  bool
 	aiOptimization    bool
 
@@ -1008,6 +1010,97 @@ func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Addres
 	return receipt.Logs, nil
 }
 
+// applyValidatedTransactionsParallel applies GPU-validated transactions using the
+// parallel state processor when available, falling back to sequential execution.
+func (w *worker) applyValidatedTransactionsParallel(txs []*types.Transaction, coinbase common.Address) ([]*types.Log, int, error) {
+	if len(txs) == 0 {
+		return nil, 0, nil
+	}
+
+	if w.current == nil || w.current.state == nil {
+		return nil, 0, errors.New("no active mining state for GPU batch")
+	}
+
+	// Ensure the gas pool is initialised
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+	}
+
+	// Preserve state in case the parallel executor fails
+	snapshot := w.current.state.Snapshot()
+	prevTxCount := w.current.tcount
+	prevGasUsed := w.current.header.GasUsed
+	prevGasPool := w.current.gasPool.Gas()
+	prevTxLen := len(w.current.txs)
+	prevReceiptLen := len(w.current.receipts)
+
+	// Prefer the high-throughput parallel processor when available
+	if w.parallelProcessor != nil {
+		receipts, logs, finalGasUsed, err := w.parallelProcessor.ApplyTransactions(
+			w.current.header,
+			w.current.state,
+			w.current.gasPool,
+			w.current.header.GasUsed,
+			txs,
+			*w.chain.GetVMConfig(),
+			w.current.extraValidator,
+		)
+		if err != nil {
+			w.current.state.RevertToSnapshot(snapshot)
+			w.current.tcount = prevTxCount
+			w.current.header.GasUsed = prevGasUsed
+			*w.current.gasPool = core.GasPool(prevGasPool)
+			w.current.txs = w.current.txs[:prevTxLen]
+			w.current.receipts = w.current.receipts[:prevReceiptLen]
+			return nil, 0, err
+		}
+
+		w.current.txs = append(w.current.txs, txs...)
+		w.current.receipts = append(w.current.receipts, receipts...)
+		w.current.tcount += len(txs)
+		w.current.header.GasUsed = finalGasUsed
+		return logs, len(txs), nil
+	}
+
+	// Sequential fallback used if the parallel processor is unavailable
+	var coalescedLogs []*types.Log
+	applied := 0
+	for _, tx := range txs {
+		w.current.state.Prepare(tx.Hash(), w.current.tcount)
+		logs, err := w.commitTransaction(tx, coinbase)
+		if err != nil {
+			continue
+		}
+		coalescedLogs = append(coalescedLogs, logs...)
+		w.current.tcount++
+		applied++
+	}
+
+	return coalescedLogs, applied, nil
+}
+
+// recordGPUExecutorDiagnostics captures diagnostic metrics for GPU batches handed
+// to the parallel CPU executor and stores them for external reporting.
+func (w *worker) recordGPUExecutorDiagnostics(batchNumber int, applied int, dispatchTime, executorTime time.Duration) {
+	savings := time.Duration(0)
+	if executorTime > dispatchTime {
+		savings = executorTime - dispatchTime
+	}
+
+	w.mu.Lock()
+	w.lastDispatchTime = dispatchTime
+	w.lastExecutorTime = executorTime
+	w.mu.Unlock()
+
+	log.Info("GPU batch CPU executor diagnostics",
+		"batchNumber", batchNumber,
+		"appliedTxs", applied,
+		"mainThreadDispatch", dispatchTime,
+		"executorRuntime", executorTime,
+		"mainThreadSavings", savings,
+	)
+}
+
 func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coinbase common.Address, interrupt *int32) bool {
 	// Short circuit if current is nil
 	if w.current == nil {
@@ -1074,24 +1167,58 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			log.Info("Processing GPU batch", "batchNumber", batchNumber, "batchSize", len(txBatch), "totalProcessed", totalGPUProcessed)
 
 			// Use hybrid processor for GPU-accelerated prevalidation
+			appliedCount := 0
+			var batchApplyErr error
 			err := w.hybridProcessor.ProcessTransactionsBatch(txBatch, func(results []*hybrid.TransactionResult, err error) {
 				if err != nil {
+					batchApplyErr = err
 					log.Warn("GPU batch processing failed, falling back to sequential", "batchNumber", batchNumber, "error", err)
 					return
 				}
 
-				// Apply GPU-validated transactions sequentially (EVM execution still needs to be sequential for state consistency)
+				callbackStart := time.Now()
+				validated := make([]*types.Transaction, 0, len(results))
 				for i, result := range results {
 					if result.Valid && i < len(txBatch) {
-						// GPU validated the transaction, now apply it to state
-						w.current.state.Prepare(txBatch[i].Hash(), w.current.tcount)
-						logs, err := w.commitTransaction(txBatch[i], coinbase)
-						if err == nil {
-							coalescedLogs = append(coalescedLogs, logs...)
-							w.current.tcount++
-						}
+						validated = append(validated, txBatch[i])
 					}
 				}
+				dispatchDuration := time.Since(callbackStart)
+
+				if len(validated) == 0 {
+					log.Debug("GPU batch returned no validated transactions", "batchNumber", batchNumber)
+					return
+				}
+
+				var (
+					applyLogs    []*types.Log
+					applied      int
+					applyErr     error
+					executorTime time.Duration
+				)
+
+				var applyWg sync.WaitGroup
+				applyWg.Add(1)
+				go func(batchID int, txs []*types.Transaction) {
+					defer applyWg.Done()
+					cpuStart := time.Now()
+					applyLogs, applied, applyErr = w.applyValidatedTransactionsParallel(txs, coinbase)
+					executorTime = time.Since(cpuStart)
+				}(batchNumber, validated)
+
+				applyWg.Wait()
+
+				if applyErr != nil {
+					batchApplyErr = applyErr
+					log.Warn("Parallel executor failed to apply GPU validated transactions", "batchNumber", batchNumber, "error", applyErr, "dispatchTime", dispatchDuration, "executorTime", executorTime)
+					return
+				}
+
+				if len(applyLogs) > 0 {
+					coalescedLogs = append(coalescedLogs, applyLogs...)
+				}
+				appliedCount = applied
+				w.recordGPUExecutorDiagnostics(batchNumber, appliedCount, dispatchDuration, executorTime)
 			})
 
 			// Update batch performance metrics
@@ -1101,11 +1228,19 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			if err != nil {
 				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "batchNumber", batchNumber, "error", err)
 				break
-			} else {
-				// GPU batch processing completed successfully
-				totalGPUProcessed += len(txBatch)
+			}
+			if batchApplyErr != nil {
+				log.Warn("GPU batch application failed, aborting GPU pipeline", "batchNumber", batchNumber, "error", batchApplyErr)
+				break
+			}
+			if appliedCount > 0 {
+				totalGPUProcessed += appliedCount
 				batchNumber++
-				log.Info("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
+				log.Info("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "validated", appliedCount, "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
+			} else {
+				log.Debug("GPU batch produced no applicable transactions", "batchNumber", batchNumber)
+				// GPU batch processing completed successfully
+				batchNumber++
 			}
 
 			// Check for interrupts between batches
@@ -1594,11 +1729,13 @@ func (w *worker) GetMinerStats() map[string]interface{} {
 	defer w.mu.RUnlock()
 
 	stats := map[string]interface{}{
-		"gpu_enabled":       w.gpuEnabled,
-		"batch_threshold":   w.batchThreshold,
-		"last_batch_size":   w.lastBatchSize,
-		"last_batch_time":   w.lastBatchTime,
-		"adaptive_batching": w.adaptiveBatching,
+		"gpu_enabled":        w.gpuEnabled,
+		"batch_threshold":    w.batchThreshold,
+		"last_batch_size":    w.lastBatchSize,
+		"last_batch_time":    w.lastBatchTime,
+		"last_dispatch_time": w.lastDispatchTime,
+		"last_executor_time": w.lastExecutorTime,
+		"adaptive_batching":  w.adaptiveBatching,
 	}
 
 	if w.hybridProcessor != nil {
