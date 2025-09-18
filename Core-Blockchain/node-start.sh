@@ -49,18 +49,18 @@ progress_bar() {
 source ./.env
 source ~/.bashrc
 
-# Configure geth cache parameters (defaults tuned for ~48GB total)
+# Configure geth cache parameters with conservative defaults to prevent startup crashes
 # Override via environment: CACHE_MB, CACHE_DB_MB, CACHE_TRIE_MB, CACHE_GC_MB
-CACHE_MB=${CACHE_MB:-49152}
+CACHE_MB=${CACHE_MB:-4096}  # Start with 4GB instead of 48GB
 CACHE_DB_MB=${CACHE_DB_MB:-$(( CACHE_MB*70/100 ))}
 CACHE_TRIE_MB=${CACHE_TRIE_MB:-$(( CACHE_MB*20/100 ))}
 CACHE_GC_MB=${CACHE_GC_MB:-$(( CACHE_MB*10/100 ))}
 
-# Safety clamp: do not exceed ~85% of physical RAM
+# Safety clamp: do not exceed ~50% of physical RAM for stability
 if [ -r /proc/meminfo ]; then
   MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
   MEM_TOTAL_MB=$(( MEM_TOTAL_KB / 1024 ))
-  MAX_SAFE_MB=$(( MEM_TOTAL_MB * 85 / 100 ))
+  MAX_SAFE_MB=$(( MEM_TOTAL_MB * 50 / 100 ))  # Reduced from 85% to 50%
   if [ "$CACHE_MB" -gt "$MAX_SAFE_MB" ]; then
     echo -e "${ORANGE}⚠️  Requested cache ${CACHE_MB}MB exceeds safe limit (${MAX_SAFE_MB}MB). Clamping.${NC}"
     CACHE_MB=$MAX_SAFE_MB
@@ -156,7 +156,7 @@ startRpc(){
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
-        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api $HTTP_API_LIST --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api $HTTP_API_LIST --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=16 --txpool.globalslots=4096 --txpool.accountqueue=64 --txpool.globalqueue=1024 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
       fi
     fi
   done
@@ -187,7 +187,7 @@ startValidator(){
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
-        tmux send-keys -t node$node_num "LD_LIBRARY_PATH=./node_src/common/gpu:/usr/local/cuda/lib64:\$LD_LIBRARY_PATH ./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 console" Enter
+        tmux send-keys -t node$node_num "LD_LIBRARY_PATH=./node_src/common/gpu:/usr/local/cuda/lib64:\$LD_LIBRARY_PATH ./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=16 --txpool.globalslots=4096 --txpool.accountqueue=64 --txpool.globalqueue=1024 --maxpeers=25 console" Enter
       fi
     fi
   done
