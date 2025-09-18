@@ -67,10 +67,16 @@ var (
 	snapshotStorageReadTimer = metrics.NewRegisteredTimer("chain/snapshot/storage/reads", nil)
 	snapshotCommitTimer      = metrics.NewRegisteredTimer("chain/snapshot/commits", nil)
 
-	blockInsertTimer     = metrics.NewRegisteredTimer("chain/inserts", nil)
-	blockValidationTimer = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockExecutionTimer  = metrics.NewRegisteredTimer("chain/execution", nil)
-	blockWriteTimer      = metrics.NewRegisteredTimer("chain/write", nil)
+	blockInsertTimer          = metrics.NewRegisteredTimer("chain/inserts", nil)
+	blockValidationTimer      = metrics.NewRegisteredTimer("chain/validation", nil)
+	blockExecutionTimer       = metrics.NewRegisteredTimer("chain/execution", nil)
+	blockWriteTimer           = metrics.NewRegisteredTimer("chain/write", nil)
+	blockWriteLockWaitTimer   = metrics.NewRegisteredTimer("chain/write/lock/wait", nil)
+	blockWriteLockHeldTimer   = metrics.NewRegisteredTimer("chain/write/lock/held", nil)
+	blockAsyncCommitTimer     = metrics.NewRegisteredTimer("chain/write/asynccommit", nil)
+	blockTrieGCTimer          = metrics.NewRegisteredTimer("chain/write/trie/gc", nil)
+	blockBatchWaitTimer       = metrics.NewRegisteredTimer("chain/write/batchwait", nil)
+	blockCanonicalUpdateTimer = metrics.NewRegisteredTimer("chain/head/update", nil)
 
 	blockReorgMeter         = metrics.NewRegisteredMeter("chain/reorg/executes", nil)
 	blockReorgAddMeter      = metrics.NewRegisteredMeter("chain/reorg/add", nil)
@@ -1196,11 +1202,13 @@ func (bc *BlockChain) WriteBlockWithState(block *types.Block, receipts []*types.
 		return NonStatTy, errInsertionInterrupted
 	}
 	lockAcquired := time.Now()
+	blockWriteLockWaitTimer.UpdateSince(lockWaitStart)
 	if wait := lockAcquired.Sub(lockWaitStart); wait > 0 {
 		log.Debug("chainmu acquired", "op", "WriteBlockWithState", "wait", wait)
 	}
 	defer func(acq time.Time) {
 		held := time.Since(acq)
+		blockWriteLockHeldTimer.UpdateSince(acq)
 		log.Debug("chainmu held", "op", "WriteBlockWithState", "held", held)
 		bc.chainmu.Unlock()
 	}(lockAcquired)
@@ -1254,67 +1262,82 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 				log.Error("Commit trie database failed", "number", blockNumber, "hash", blockHash, "err", err)
 				return
 			}
-		} else {
-			// Full but not archive node, do proper garbage collection
-			triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
-			bc.triegc.Push(root, -int64(blockNumber))
+			return
+		}
+		gcStart := time.Now()
+		defer func() {
+			elapsed := time.Since(gcStart)
+			blockTrieGCTimer.Update(elapsed)
+			log.Info("metric", "method", "trieGC", "number", blockNumber, "hash", blockHash, "time", elapsed)
+		}()
+		// Full but not archive node, do proper garbage collection
+		triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
+		bc.triegc.Push(root, -int64(blockNumber))
 
-			if current := blockNumber; current > TriesInMemory {
-				// If we exceeded our memory allowance, flush matured singleton nodes to disk
-				var (
-					nodes, imgs = triedb.Size()
-					limit       = common.StorageSize(bc.cacheConfig.TrieDirtyLimit) * 1024 * 1024
-				)
-				log.Info("metric", "number", blockNumber, "hash", blockHash,
-					"triedbStatus", fmt.Sprintf("%v, [limit %v], %v, %v, [limit %v]", nodes, limit, imgs, bc.gcproc, bc.cacheConfig.TrieTimeLimit))
-				if nodes > limit || imgs > 4*1024*1024 {
+		if current := blockNumber; current > TriesInMemory {
+			// If we exceeded our memory allowance, flush matured singleton nodes to disk
+			var (
+				nodes, imgs = triedb.Size()
+				limit       = common.StorageSize(bc.cacheConfig.TrieDirtyLimit) * 1024 * 1024
+			)
+			log.Info("metric", "number", blockNumber, "hash", blockHash,
+				"triedbStatus", fmt.Sprintf("%v, [limit %v], %v, %v, [limit %v]", nodes, limit, imgs, bc.gcproc, bc.cacheConfig.TrieTimeLimit))
+			if nodes > limit || imgs > 4*1024*1024 {
+				start := time.Now()
+				triedb.Cap(limit - ethdb.IdealBatchSize)
+				log.Info("metric", "method", "triedbCap", "number", blockNumber, "hash", blockHash, "time", time.Since(start))
+			}
+			// Find the next state trie we need to commit
+			chosen := current - TriesInMemory
+
+			// If we exceeded out time allowance, flush an entire trie to disk
+			if bc.gcproc > bc.cacheConfig.TrieTimeLimit {
+				// If the header is missing (canonical chain behind), we're reorging a low
+				// diff sidechain. Suspend committing until this operation is completed.
+				header := bc.GetHeaderByNumber(chosen)
+				if header == nil {
+					log.Warn("Reorg in progress, trie commit postponed", "number", chosen)
+				} else {
+					// If we're exceeding limits but haven't reached a large enough memory gap,
+					// warn the user that the system is becoming unstable.
+					if chosen < lastWrite+TriesInMemory && bc.gcproc >= 2*bc.cacheConfig.TrieTimeLimit {
+						log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", bc.cacheConfig.TrieTimeLimit, "optimum", float64(chosen-lastWrite)/TriesInMemory)
+					}
+					// Flush an entire trie and restart the counters
 					start := time.Now()
-					triedb.Cap(limit - ethdb.IdealBatchSize)
-					log.Info("metric", "method", "triedbCap", "number", blockNumber, "hash", blockHash, "time", time.Since(start))
+					triedb.Commit(header.Root, true, nil)
+					log.Info("metric", "method", "triedbCommit", "number", blockNumber, "hash", blockHash, "time", time.Since(start))
+					lastWrite = chosen
+					bc.gcproc = 0
 				}
-				// Find the next state trie we need to commit
-				chosen := current - TriesInMemory
-
-				// If we exceeded out time allowance, flush an entire trie to disk
-				if bc.gcproc > bc.cacheConfig.TrieTimeLimit {
-					// If the header is missing (canonical chain behind), we're reorging a low
-					// diff sidechain. Suspend committing until this operation is completed.
-					header := bc.GetHeaderByNumber(chosen)
-					if header == nil {
-						log.Warn("Reorg in progress, trie commit postponed", "number", chosen)
-					} else {
-						// If we're exceeding limits but haven't reached a large enough memory gap,
-						// warn the user that the system is becoming unstable.
-						if chosen < lastWrite+TriesInMemory && bc.gcproc >= 2*bc.cacheConfig.TrieTimeLimit {
-							log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", bc.cacheConfig.TrieTimeLimit, "optimum", float64(chosen-lastWrite)/TriesInMemory)
-						}
-						// Flush an entire trie and restart the counters
-						start := time.Now()
-						triedb.Commit(header.Root, true, nil)
-						log.Info("metric", "method", "triedbCommit", "number", blockNumber, "hash", blockHash, "time", time.Since(start))
-						lastWrite = chosen
-						bc.gcproc = 0
-					}
+			}
+			// Garbage collect anything below our required write retention
+			for !bc.triegc.Empty() {
+				root, number := bc.triegc.Pop()
+				if uint64(-number) > chosen {
+					bc.triegc.Push(root, number)
+					break
 				}
-				// Garbage collect anything below our required write retention
-				for !bc.triegc.Empty() {
-					root, number := bc.triegc.Pop()
-					if uint64(-number) > chosen {
-						bc.triegc.Push(root, number)
-						break
-					}
-					triedb.Dereference(root.(common.Hash))
-				}
+				triedb.Dereference(root.(common.Hash))
 			}
 		}
 	}
 
 	// Commit all cached state changes into underlying memory database async.
+	commitStart := time.Now()
 	if err = state.AsyncCommit(bc.chainConfig.IsEIP158(block.Number()), afterCommit); err != nil {
+		blockAsyncCommitTimer.Update(time.Since(commitStart))
 		return NonStatTy, err
 	}
+	commitElapsed := time.Since(commitStart)
+	blockAsyncCommitTimer.Update(commitElapsed)
+	log.Info("metric", "method", "asyncCommit", "number", blockNumber, "hash", blockHash, "time", commitElapsed)
 
+	batchWaitStart := time.Now()
 	waitBlockBatchWrite.Wait()
+	batchWaitElapsed := time.Since(batchWaitStart)
+	blockBatchWaitTimer.Update(batchWaitElapsed)
+	log.Info("metric", "method", "blockBatchWait", "number", blockNumber, "hash", blockHash, "time", batchWaitElapsed)
 	log.Info("metric", "method", "blockBatchWrite", "number", blockNumber, "hash", blockHash, "time", time.Since(batchStart))
 	// If the total difficulty is higher than our known, add it to the canonical chain
 	// Second clause in the if statement reduces the vulnerability to selfish mining.
@@ -1347,11 +1370,10 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 	// Set new head.
 	if status == CanonStatTy {
+		canonicalStart := time.Now()
 		bc.writeHeadBlock(block)
-	}
-	bc.futureBlocks.Remove(block.Hash())
+		bc.futureBlocks.Remove(block.Hash())
 
-	if status == CanonStatTy {
 		bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
 		if len(logs) > 0 {
 			bc.logsFeed.Send(logs)
@@ -1364,7 +1386,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		if emitHeadEvent {
 			bc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
 		}
+		canonicalElapsed := time.Since(canonicalStart)
+		blockCanonicalUpdateTimer.Update(canonicalElapsed)
+		log.Info("metric", "method", "canonicalUpdate", "number", blockNumber, "hash", blockHash, "time", canonicalElapsed)
 	} else {
+		bc.futureBlocks.Remove(block.Hash())
 		bc.chainSideFeed.Send(ChainSideEvent{Block: block})
 	}
 	return status, nil
