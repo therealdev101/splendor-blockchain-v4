@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math/big"
 	"sync"
 	"time"
 	"unsafe"
@@ -1112,6 +1113,13 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		valid := out[offset+32] != 0
 		execStatus := out[offset+33]
 		
+		// CPU signature verification for safety
+		if valid {
+			if err := p.verifyTxSignatureCPU(batch.Transactions[i]); err != nil {
+				valid = false
+				execStatus = 3 // invalid
+			}
+		}
 		batch.Results[i].Valid = valid
 		
 		// Extract gas used
@@ -1460,6 +1468,22 @@ func (p *GPUProcessor) prepareTransactionLengths(txs []*types.Transaction) []int
         }
     }
     return lengths
+}
+
+// verifyTxSignatureCPU performs canonical ECDSA recovery/verification on CPU
+func (p *GPUProcessor) verifyTxSignatureCPU(tx *types.Transaction) error {
+    // Choose permissive signer based on chain ID (handles typed txs)
+    chainID := tx.ChainId()
+    // Ensure non-nil
+    if chainID == nil {
+        chainID = new(big.Int)
+    }
+    signer := types.LatestSignerForChainID(chainID)
+    // Attempt to recover sender; error implies invalid signature
+    if _, err := types.Sender(signer, tx); err != nil {
+        return err
+    }
+    return nil
 }
 
 // prepareStateSnapshots prepares state snapshot data for GPU processing

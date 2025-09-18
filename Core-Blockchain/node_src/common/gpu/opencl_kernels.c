@@ -248,18 +248,31 @@ uchar decode_rlp_transaction_ocl(__global uchar* tx_data, int length, ulong* gas
                                  int* to_off, int* to_len, int* data_off, int* data_len,
                                  int* v_off, int* v_len, int* r_off, int* r_len, int* s_off, int* s_len) {
     if (length < 3) return 0;
-    if (tx_data[0] < 0xc0) return 0;
-    int list_len=0, hdr=0; if (!rlp_read_len_ocl(tx_data, length, 0, 1, &list_len, &hdr)) return 0;
+    int start = 0;
+    if (tx_data[0] < 0xc0) {
+        if (!(tx_data[0] == 0x01 || tx_data[0] == 0x02)) return 0;
+        start = 1;
+    }
+    int list_len=0, hdr=0; if (!rlp_read_len_ocl(tx_data, length, start, 1, &list_len, &hdr)) return 0;
+    hdr += start;
     int pos = hdr; int end = hdr + list_len; if (end > length) return 0;
     int off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_off=*v_len=*r_off=*r_len=*s_off=*s_len=0;
-    for (int idx=0; idx<9; idx++) {
+    int max_fields = (tx_data[0] == 0x02) ? 12 : ((tx_data[0] == 0x01) ? 11 : 9);
+    for (int field=0; field<max_fields; field++) {
         if (!rlp_next_item_ocl(tx_data, end, pos, &off, &len, &pos)) return 0;
-        if (idx == 2) { ulong gl=0; for (int i=0;i<len;i++){ gl = (gl<<8) | (ulong)tx_data[off+i]; } *gas_limit = gl; }
-        else if (idx == 3) { *to_off = off; *to_len = len; }
-        else if (idx == 5) { *data_off = off; *data_len = len; }
-        else if (idx == 6) { *v_off = off; *v_len = len; }
-        else if (idx == 7) { *r_off = off; *r_len = len; }
-        else if (idx == 8) { *s_off = off; *s_len = len; }
+        if (((tx_data[0] >= 0xc0) && field == 2) || (tx_data[0] == 0x01 && field == 3) || (tx_data[0] == 0x02 && field == 4)) {
+            ulong gl=0; for (int i=0;i<len;i++){ gl = (gl<<8) | (ulong)tx_data[off+i]; } *gas_limit = gl;
+        } else if (((tx_data[0] >= 0xc0) && field == 3) || (tx_data[0] == 0x01 && field == 4) || (tx_data[0] == 0x02 && field == 5)) {
+            *to_off = off; *to_len = len;
+        } else if (((tx_data[0] >= 0xc0) && field == 5) || (tx_data[0] == 0x01 && field == 6) || (tx_data[0] == 0x02 && field == 7)) {
+            *data_off = off; *data_len = len;
+        } else if (((tx_data[0] >= 0xc0) && field == 6) || (tx_data[0] == 0x01 && field == 8) || (tx_data[0] == 0x02 && field == 9)) {
+            *v_off = off; *v_len = len;
+        } else if (((tx_data[0] >= 0xc0) && field == 7) || (tx_data[0] == 0x01 && field == 9) || (tx_data[0] == 0x02 && field == 10)) {
+            *r_off = off; *r_len = len;
+        } else if (((tx_data[0] >= 0xc0) && field == 8) || (tx_data[0] == 0x01 && field == 10) || (tx_data[0] == 0x02 && field == 11)) {
+            *s_off = off; *s_len = len;
+        }
     }
     return (*gas_limit > 0);
 }
