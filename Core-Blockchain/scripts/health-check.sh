@@ -110,13 +110,8 @@ check_item "500B gas limit in env" "grep 'GAS_LIMIT=500000000000' ./.env"
 check_item "RTX 4000 batch size (800K)" "grep 'GPU_MAX_BATCH_SIZE=800000' ./.env"
 check_item "RTX 4000 memory (18GB blockchain allocation)" "grep 'GPU_MAX_MEMORY_USAGE=19327352832' ./.env"
 check_item "2M TPS target" "grep 'THROUGHPUT_TARGET=2000000' ./.env"
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-check_item "RTX 4000 memory (18GB blockchain allocation)" "grep 'GPU_MAX_MEMORY_USAGE=19327352832' ./.env"
-check_item "2M TPS target" "grep 'THROUGHPUT_TARGET=2000000' ./.env"
-=======
-check_item "RTX 4000 memory (18GB blockchain allocation)" "grep 'GPU_MAX_MEMORY_USAGE=19327352832' ./.env"
-check_item "2M TPS target" "grep 'THROUGHPUT_TARGET=2000000' ./.env"
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+check_warning "Hybrid logging cooldown configured" "grep 'HYBRID_STRATEGY_LOG_COOLDOWN' ./.env"
+check_warning "Hybrid metrics interval configured" "grep 'HYBRID_METRICS_LOG_INTERVAL' ./.env"
 
 echo -e "\n${PURPLE}=== 4. GPU ACCELERATION ===${NC}"
 

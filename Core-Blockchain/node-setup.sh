@@ -406,11 +406,6 @@ ENABLE_GPU=true
 PREFERRED_GPU_TYPE=CUDA
 GPU_MAX_BATCH_SIZE=800000
 GPU_MAX_MEMORY_USAGE=19327352832
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-GPU_MAX_MEMORY_USAGE=19327352832
-=======
-GPU_MAX_MEMORY_USAGE=19327352832
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 GPU_MEMORY_FRACTION=0.9
 GPU_HASH_WORKERS=80
 GPU_SIGNATURE_WORKERS=80
@@ -426,11 +421,14 @@ PERFORMANCE_MONITORING=true
 MAX_CPU_UTILIZATION=0.95
 MAX_GPU_UTILIZATION=0.98
 THROUGHPUT_TARGET=2000000
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-THROUGHPUT_TARGET=2000000
-=======
-THROUGHPUT_TARGET=2000000
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+
+# Logging controls for hybrid processing stability
+HYBRID_DEBUG_LOGS=true
+HYBRID_STRATEGY_LOG_COOLDOWN=10s
+HYBRID_METRICS_LOG_INTERVAL=1s
+HYBRID_THROUGHPUT_WARNING_COOLDOWN=5s
+HYBRID_THROUGHPUT_SUCCESS_COOLDOWN=30s
+HYBRID_BATCH_LOG_INTERVAL=2s
 
 # Memory Management (RTX 4000 SFF Ada - 20GB Total)
 MAX_MEMORY_USAGE=68719476736
