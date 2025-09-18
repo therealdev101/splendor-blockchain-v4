@@ -511,11 +511,24 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 		PerformanceMonitoring: getEnvBool("PERFORMANCE_MONITORING", true),
 		MaxCPUUtilization:     getEnvFloat("MAX_CPU_UTILIZATION", 0.95),
 		MaxGPUUtilization:     getEnvFloat("MAX_GPU_UTILIZATION", 0.98),
-		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 500000),
+		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 2000000),
 		GPUConfig: &gpu.GPUConfig{
 			PreferredGPUType: gpuType,
 			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
-			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 15032385536), // 14GB blockchain allocation
+			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 2000000),
+		GPUConfig: &gpu.GPUConfig{
+			PreferredGPUType: gpuType,
+			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
+			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
+=======
+		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 2000000),
+		GPUConfig: &gpu.GPUConfig{
+			PreferredGPUType: gpuType,
+			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
+			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 			HashWorkers:      getEnvInt("GPU_HASH_WORKERS", 80),
 			SignatureWorkers: getEnvInt("GPU_SIGNATURE_WORKERS", 80),
 			TxWorkers:        getEnvInt("GPU_TX_WORKERS", 80),

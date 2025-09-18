@@ -405,7 +405,12 @@ configure_gpu_environment(){
 ENABLE_GPU=true
 PREFERRED_GPU_TYPE=CUDA
 GPU_MAX_BATCH_SIZE=800000
-GPU_MAX_MEMORY_USAGE=15032385536
+GPU_MAX_MEMORY_USAGE=19327352832
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+GPU_MAX_MEMORY_USAGE=19327352832
+=======
+GPU_MAX_MEMORY_USAGE=19327352832
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 GPU_MEMORY_FRACTION=0.9
 GPU_HASH_WORKERS=80
 GPU_SIGNATURE_WORKERS=80
@@ -420,7 +425,12 @@ ADAPTIVE_LOAD_BALANCING=true
 PERFORMANCE_MONITORING=true
 MAX_CPU_UTILIZATION=0.95
 MAX_GPU_UTILIZATION=0.98
-THROUGHPUT_TARGET=500000
+THROUGHPUT_TARGET=2000000
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+THROUGHPUT_TARGET=2000000
+=======
+THROUGHPUT_TARGET=2000000
+>>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 
 # Memory Management (RTX 4000 SFF Ada - 20GB Total)
 MAX_MEMORY_USAGE=68719476736
@@ -864,8 +874,8 @@ User=root
 WorkingDirectory=/opt/vllm-env
 Environment=CUDA_VISIBLE_DEVICES=0
 Environment=VLLM_USE_MODELSCOPE=False
-Environment=CUDA_MEMORY_FRACTION=0.15
-ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.15 --max-model-len 2048 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
+Environment=CUDA_MEMORY_FRACTION=0.1
+ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.1 --max-model-len 2048 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -895,7 +905,7 @@ AI_CONFIDENCE_THRESHOLD=0.75
 AI_ENABLE_LEARNING=true
 AI_ENABLE_PREDICTIONS=true
 AI_FAST_MODE=true
-VLLM_GPU_MEMORY_UTILIZATION=0.15
+VLLM_GPU_MEMORY_UTILIZATION=0.1
 VLLM_MAX_MODEL_LEN=2048
 EOF
 

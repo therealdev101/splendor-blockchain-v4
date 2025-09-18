@@ -1671,7 +1671,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 	}
 
 	// Adjust based on current TPS vs target
-	targetTPS := uint64(500000) // Target 500K TPS for 200K+ sustained performance
+	targetTPS := uint64(2000000) // Target 2M TPS stretch goal for GPU-first execution
 	if stats.CurrentTPS < targetTPS/2 {
 		// Low TPS, try larger batches
 		baseBatchSize = int(float64(baseBatchSize) * 1.2)

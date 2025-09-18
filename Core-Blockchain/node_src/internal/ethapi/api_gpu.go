@@ -408,14 +408,14 @@ func (api *GPUAccelerationAPI) GetTPSMonitoring(ctx context.Context) (map[string
 		}
 		
 		tpsData["performance_targets"] = map[string]interface{}{
-			"target_sustained_tps":  500000,  // 500K sustained
+			"target_sustained_tps":  2000000, // 2M sustained target
 			"target_peak_tps":       2000000, // 2M peak
 			"target_latency_ms":     25,      // 25ms target
 			"target_gpu_util":       95,      // 95% GPU utilization
 		}
 		
 		tpsData["performance_analysis"] = map[string]interface{}{
-			"tps_vs_target_percent":     float64(hybridStats.CurrentTPS) / 500000.0 * 100,
+			"tps_vs_target_percent":     float64(hybridStats.CurrentTPS) / 2000000.0 * 100,
 			"latency_vs_target_percent": float64(hybridStats.AvgLatency.Milliseconds()) / 25.0 * 100,
 			"gpu_util_vs_target":        hybridStats.GPUUtilization / 0.95 * 100,
 			"overall_efficiency":        calculateOverallEfficiency(hybridStats),

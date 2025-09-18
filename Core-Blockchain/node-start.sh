@@ -211,7 +211,7 @@ initializeGPU(){
       echo -e "${ORANGE}⚠️  CUDA toolkit not found - using OpenCL acceleration${NC}"
     fi
     
-    echo -e "${GREEN}GPU Config: ${ORANGE}${THROUGHPUT_TARGET:-1000000} TPS target${NC}"
+    echo -e "${GREEN}GPU Config: ${ORANGE}${THROUGHPUT_TARGET:-2000000} TPS target${NC}"
   else
     echo -e "${ORANGE}GPU acceleration disabled${NC}"
     GPU_STATUS="disabled"
@@ -247,7 +247,7 @@ finalize(){
         --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
         --host 0.0.0.0 \
         --port 8000 \
-        --gpu-memory-utilization 0.2 \
+        --gpu-memory-utilization 0.1 \
         --max-model-len 2048 \
         --dtype float16 \
         --disable-log-requests \
