@@ -592,6 +592,24 @@ int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data
     // Streamed processing with pinned host memory and triple buffering
     const int threadsPerBlock = 256;
     cudaError_t error;
+    
+    // Declare all variables at the beginning to avoid goto issues
+    int offset = 0;
+    int streamIndex = 0;
+    int chunk, i, n, blocksPerGrid;
+    size_t per_tx_bytes, target_bytes;
+    size_t txs_bytes, lens_bytes, state_bytes, access_bytes, results_bytes, signhash_bytes;
+    const int numStreams = 3;
+    cudaStream_t streams[numStreams];
+    cudaStream_t s;
+    
+    // Allocate triple-buffered device memory for chunks
+    uint8_t* d_txs[numStreams] = {0};
+    uint32_t* d_lengths[numStreams] = {0};
+    uint8_t* d_state[numStreams] = {0};
+    uint8_t* d_access[numStreams] = {0};
+    uint8_t* d_results[numStreams] = {0};
+    uint8_t* d_signhash[numStreams] = {0};
 
     // Attempt to pin host buffers for faster transfers (ignore failure)
     cudaHostRegister(txs, (size_t)count * 1024, cudaHostRegisterPortable);
@@ -602,32 +620,22 @@ int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data
     cudaHostRegister(results, (size_t)count * 160, cudaHostRegisterPortable);
 
     // Choose chunk size (~64MB per stream target)
-    size_t per_tx_bytes = 1024 + sizeof(uint32_t) + 2048 + 512 + 32 + 160; // approx
-    size_t target_bytes = 64 * 1024 * 1024; // 64MB
-    int chunk = (int)(target_bytes / per_tx_bytes);
+    per_tx_bytes = 1024 + sizeof(uint32_t) + 2048 + 512 + 32 + 160; // approx
+    target_bytes = 64 * 1024 * 1024; // 64MB
+    chunk = (int)(target_bytes / per_tx_bytes);
     if (chunk < 2048) chunk = 2048; // floor
     if (chunk > count) chunk = count;
 
-    const int numStreams = 3;
-    cudaStream_t streams[numStreams];
-    for (int i = 0; i < numStreams; ++i) cudaStreamCreate(&streams[i]);
+    for (i = 0; i < numStreams; ++i) cudaStreamCreate(&streams[i]);
 
-    // Allocate triple-buffered device memory for chunks
-    uint8_t* d_txs[numStreams] = {0};
-    uint32_t* d_lengths[numStreams] = {0};
-    uint8_t* d_state[numStreams] = {0};
-    uint8_t* d_access[numStreams] = {0};
-    uint8_t* d_results[numStreams] = {0};
-    uint8_t* d_signhash[numStreams] = {0};
+    txs_bytes = (size_t)chunk * 1024;
+    lens_bytes = (size_t)chunk * sizeof(uint32_t);
+    state_bytes = (size_t)chunk * 2048;
+    access_bytes = (size_t)chunk * 512;
+    results_bytes = (size_t)chunk * 160;
+    signhash_bytes = (size_t)chunk * 32;
 
-    size_t txs_bytes = (size_t)chunk * 1024;
-    size_t lens_bytes = (size_t)chunk * sizeof(uint32_t);
-    size_t state_bytes = (size_t)chunk * 2048;
-    size_t access_bytes = (size_t)chunk * 512;
-    size_t results_bytes = (size_t)chunk * 160;
-    size_t signhash_bytes = (size_t)chunk * 32;
-
-    for (int i = 0; i < numStreams; ++i) {
+    for (i = 0; i < numStreams; ++i) {
         if ((error = cudaMalloc(&d_txs[i], txs_bytes)) != cudaSuccess) goto stream_cleanup;
         if ((error = cudaMalloc(&d_lengths[i], lens_bytes)) != cudaSuccess) goto stream_cleanup;
         if ((error = cudaMalloc(&d_state[i], state_bytes)) != cudaSuccess) goto stream_cleanup;
@@ -635,9 +643,6 @@ int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data
         if ((error = cudaMalloc(&d_results[i], results_bytes)) != cudaSuccess) goto stream_cleanup;
         if ((error = cudaMalloc(&d_signhash[i], signhash_bytes)) != cudaSuccess) goto stream_cleanup;
     }
-
-    int offset = 0;
-    int streamIndex = 0;
     while (offset < count) {
         int n = chunk;
         if (offset + n > count) n = count - offset;
