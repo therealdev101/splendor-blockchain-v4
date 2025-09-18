@@ -2,46 +2,14 @@
 
 ## 🏗️ Overview
 
-Splendor Blockchain V4 combines **TinyLlama 1.1B AI**, **RTX 4000 SFF Ada GPU acceleration**, and **advanced parallel processing** to achieve verified 100K+ TPS performance. This guide explains the technical implementation details based on the actual Go codebase.
+Splendor Blockchain V4 combines **RTX 4000 SFF Ada GPU acceleration** and **advanced parallel processing**. This guide explains the technical implementation details based on the actual Go codebase.
 
-## 🤖 AI System Implementation
-
-### TinyLlama 1.1B Load Balancer
-
-**Location**: `Core-Blockchain/node_src/common/ai/ai_load_balancer.go`
-
-The AI system uses TinyLlama 1.1B running locally via vLLM for real-time load balancing decisions:
-
-```go
-// DefaultAIConfig returns default AI configuration for TinyLlama with vLLM
-func DefaultAIConfig() *AIConfig {
-    return &AIConfig{
-        LLMEndpoint:         "http://localhost:8000/v1/chat/completions", // vLLM OpenAI-compatible API
-        LLMModel:           "TinyLlama/TinyLlama-1.1B-Chat-v1.0", // TinyLlama 1.1B parameter model
-        LLMTimeout:         1 * time.Second, // 2x faster for high TPS optimization
-        UpdateInterval:     250 * time.Millisecond, // 2x more frequent updates for massive TPS
-        HistorySize:        200, // 2x larger history for better pattern recognition
-        LearningRate:       0.25, // Higher learning rate for rapid adaptation
-        ConfidenceThreshold: 0.65, // Lower threshold for more aggressive optimization
-    }
-}
-```
-
-**Key Features:**
-- **Decision Frequency**: Every 250ms (14,400 decisions per hour)
-- **Response Time**: <250ms via local vLLM
-- **Learning Rate**: 0.25 (aggressive adaptation)
-- **Target**: 95-98% GPU utilization
-- **Performance Gain**: +20-30% TPS increase
-
-### AI Decision Process
+## System Overview
 
 1. **Collect Metrics**: TPS, CPU%, GPU%, latency, batch size, queue depth
-2. **Generate Prompt**: Performance data + optimization targets
-3. **Query TinyLlama**: Get load balancing recommendation
-4. **Parse Response**: Extract ratio, strategy, confidence
-5. **Apply Decision**: If confidence ≥ 65%, apply to hybrid processor
-6. **Monitor Results**: Track performance improvements
+2. **Batch Processing**: Prepare transactions for efficient GPU/CPU processing
+3. **GPU Offload**: Parse/Keccak on GPU (optional, safety‑checked)
+4. **CPU Verify/EVM**: Final signature verification and EVM execution on CPU for consensus safety
 
 ## ⚡ GPU Acceleration System
 
@@ -53,12 +21,12 @@ The GPU system supports both CUDA and OpenCL with RTX 4000 SFF Ada optimization:
 
 ```go
 // DefaultGPUConfig returns optimized GPU configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM)
-// Balanced for blockchain processing + TinyLlama 1.1B AI model with 2GB VRAM reservation
+// Balanced for blockchain processing
 func DefaultGPUConfig() *GPUConfig {
     return &GPUConfig{
         PreferredGPUType: GPUTypeCUDA,   // Prefer CUDA for RTX 4000 SFF Ada when available
         MaxBatchSize:     800000,        // 4x increase - 800K batches (keeps GPU saturated)
-        MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for TinyLlama + system)
+        MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for MobileLLM + system)
         HashWorkers:      80,            // 80 workers - balance with AI workload
         SignatureWorkers: 80,            // 80 signature verification workers
         TxWorkers:        80,            // 80 transaction processing workers
@@ -68,11 +36,10 @@ func DefaultGPUConfig() *GPUConfig {
 ```
 
 **GPU Capabilities:**
-- **VRAM**: 20GB GDDR6 (18GB for blockchain, 2GB for AI)
+- **VRAM**: 20GB GDDR6
 - **CUDA Cores**: 6,144 Ada Lovelace cores
 - **Memory Bandwidth**: 360 GB/s
-- **Theoretical Max**: 15M+ transactions/second (signature verification)
-- **Batch Sizes**: Up to 800K transactions per batch
+- **Batch Sizes**: Tunable per VRAM limits
 
 ### GPU Processing Pipeline
 
@@ -234,7 +201,7 @@ The miner integrates all systems for maximum performance:
 ```go
 // Initialize parallel state processor for advanced parallel processing
 parallelConfig := core.DefaultParallelProcessorConfig()
-// Optimize for full CPU utilization while reserving resources for TinyLlama 1.1B
+// Optimize for full CPU utilization while reserving resources for MobileLLM-R1-950M (optional)
 cpuCores := runtime.NumCPU()
 parallelConfig.TxBatchSize = 100000  // 1000x larger - match GPU's capability
 parallelConfig.MaxTxConcurrency = cpuCores * 12  // Use 75% of CPU cores (leave 25% for AI)
@@ -337,7 +304,7 @@ if w.parallelProcessor != nil && totalTxCount >= 100000 {
 // AI Configuration
 aiConfig := &ai.AIConfig{
     LLMEndpoint:         "http://localhost:8000/v1/chat/completions",
-    LLMModel:           "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    LLMModel:           "facebook/MobileLLM-R1-950M",
     UpdateInterval:     250 * time.Millisecond,
     LearningRate:       0.25,
     ConfidenceThreshold: 0.65,
@@ -347,7 +314,7 @@ aiConfig := &ai.AIConfig{
 gpuConfig := &gpu.GPUConfig{
     PreferredGPUType: gpu.GPUTypeCUDA,
     MaxBatchSize:     800000,
-    MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB (leave 2GB for TinyLlama)
+    MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB (reserve ~2GB if running vLLM)
     HashWorkers:      80,
     SignatureWorkers: 80,
     TxWorkers:        80,
@@ -395,11 +362,11 @@ parallelConfig.MaxTxConcurrency = runtime.NumCPU() * 2 // Less aggressive
 
 ### Prerequisites
 
-1. **Install vLLM and TinyLlama 1.1B**:
+1. **Install vLLM and MobileLLM-R1-950M**:
    ```bash
    pip install vllm
    python -m vllm.entrypoints.openai.api_server \
-     --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+     --model facebook/MobileLLM-R1-950M \
      --port 8000
    ```
 

@@ -145,6 +145,7 @@ __kernel void ecdsa_verify_kernel(__global uchar* signatures, __global uchar* me
 // Enhanced OpenCL kernel for full transaction processing with RLP decoding and EVM execution
 __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* tx_lengths,
                                        __global uchar* state_data, __global uchar* access_lists,
+                                       __global uchar* signing_hashes,
                                        __global uchar* results, int batch_size) {
     int idx = get_global_id(0);
     
@@ -154,7 +155,7 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     int tx_len = tx_lengths[idx];
     __global uchar* state = state_data + idx * 2048;  // 2KB state snapshot per tx
     __global uchar* access_list = access_lists + idx * 512; // 512B access list per tx
-    __global uchar* result = results + idx * 128;     // 128 bytes result per transaction (expanded)
+    __global uchar* result = results + idx * 160;     // 160 bytes result per transaction (expanded)
     
     // Initialize result structure
     // [0-31]: transaction hash
@@ -163,7 +164,8 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     // [34-41]: gas used (8 bytes LE)
     // [42-73]: return data hash (32 bytes)
     // [74-105]: revert reason hash (32 bytes) 
-    // [106-127]: reserved for future use
+    // [106-137]: signing-hash (32 bytes)
+    // [138-159]: reserved for future use
     
     uchar valid = 0;
     uchar exec_status = 3; // invalid by default
@@ -216,6 +218,13 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     
     // Revert reason hash (32 bytes)
     for (int i=0;i<32;i++) result[74 + i] = revert_hash[i];
+    // Signing-hash (32 bytes)
+    if (signing_hashes != 0) {
+        __global uchar* sh = signing_hashes + idx * 32;
+        for (int i=0;i<32;i++) result[106 + i] = sh[i];
+    } else {
+        for (int i=0;i<32;i++) result[106 + i] = 0;
+    }
 }
 
 // Helper RLP readers
@@ -544,7 +553,7 @@ int verifySignaturesOpenCL(void* signatures, int count, void* results) {
 }
 
 // Enhanced OpenCL transaction processing with full execution context
-int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, int txCount, void* results) {
+int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, void* signingHashes, int txCount, void* results) {
     if (!opencl_initialized || txCount <= 0) {
         return -1;
     }
@@ -555,7 +564,7 @@ int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* 
     size_t tx_data_size = txCount * 1024;        // 1KB per transaction
     size_t state_size = txCount * 2048;          // 2KB state snapshot per transaction
     size_t access_size = txCount * 512;          // 512B access list per transaction
-    size_t result_size = txCount * 128;          // 128 bytes result per transaction (expanded)
+    size_t result_size = txCount * 160;          // 160 bytes result per transaction (expanded)
     
     cl_mem tx_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, tx_data_size, NULL, &err);
     CL_CHECK(err);
@@ -570,6 +579,10 @@ int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* 
     CL_CHECK(err);
     
     cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, result_size, NULL, &err);
+    CL_CHECK(err);
+
+    // Signing hash buffer (32B per tx)
+    cl_mem signhash_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, txCount * 32, NULL, &err);
     CL_CHECK(err);
     
     // Copy transaction data
@@ -598,14 +611,24 @@ int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* 
     // Set lengths from provided pointer
     if (!txLens) { clReleaseMemObject(tx_buffer); clReleaseMemObject(lengths_buffer); clReleaseMemObject(state_buffer); clReleaseMemObject(access_buffer); clReleaseMemObject(result_buffer); return -1; }
     CL_CHECK(clEnqueueWriteBuffer(queues[0], lengths_buffer, CL_TRUE, 0, txCount * sizeof(int), txLens, 0, NULL, NULL));
+    // Copy signing hashes
+    if (signingHashes) {
+        CL_CHECK(clEnqueueWriteBuffer(queues[0], signhash_buffer, CL_TRUE, 0, txCount * 32, signingHashes, 0, NULL, NULL));
+    } else {
+        // Zero-init
+        uint8_t* zero_sh = calloc(txCount * 32, 1);
+        CL_CHECK(clEnqueueWriteBuffer(queues[0], signhash_buffer, CL_TRUE, 0, txCount * 32, zero_sh, 0, NULL, NULL));
+        free(zero_sh);
+    }
     
     // Set enhanced kernel arguments
     CL_CHECK(clSetKernelArg(tx_kernel, 0, sizeof(cl_mem), &tx_buffer));
     CL_CHECK(clSetKernelArg(tx_kernel, 1, sizeof(cl_mem), &lengths_buffer));
     CL_CHECK(clSetKernelArg(tx_kernel, 2, sizeof(cl_mem), &state_buffer));
     CL_CHECK(clSetKernelArg(tx_kernel, 3, sizeof(cl_mem), &access_buffer));
-    CL_CHECK(clSetKernelArg(tx_kernel, 4, sizeof(cl_mem), &result_buffer));
-    CL_CHECK(clSetKernelArg(tx_kernel, 5, sizeof(int), &txCount));
+    CL_CHECK(clSetKernelArg(tx_kernel, 4, sizeof(cl_mem), &signhash_buffer));
+    CL_CHECK(clSetKernelArg(tx_kernel, 5, sizeof(cl_mem), &result_buffer));
+    CL_CHECK(clSetKernelArg(tx_kernel, 6, sizeof(int), &txCount));
     
     // Execute kernel
     size_t global_work_size = txCount;
@@ -625,6 +648,7 @@ int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* 
     clReleaseMemObject(state_buffer);
     clReleaseMemObject(access_buffer);
     clReleaseMemObject(result_buffer);
+    clReleaseMemObject(signhash_buffer);
     
     
     return 0;

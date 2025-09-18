@@ -1,26 +1,20 @@
-# Splendor AI-Optimized Validator Installation Guide
+# Splendor Validator Installation Guide
 
 ## 🖥️ **ACTUAL TESTING HARDWARE REQUIREMENTS**
 
 **Verified Configuration (September 2025):**
 - **GPU**: NVIDIA RTX 4000 SFF Ada Generation (20GB VRAM)
 - **CPU**: 16+ cores (32+ threads), Intel i5-13500 or equivalent
-- **RAM**: 64GB DDR4 (minimum for AI + GPU + blockchain processing)
+- **RAM**: 32GB+ DDR4 recommended
 - **Storage**: 2TB+ NVMe SSD (enterprise grade recommended)
 - **Network**: Gigabit+ connection for optimal performance
 - **OS**: Ubuntu 20.04 LTS or 22.04 LTS
 
-**AI System Requirements:**
-- **TinyLlama 1.1B**: 2GB VRAM reserved for AI load balancer
-- **vLLM Server**: Running on localhost:8000
-- **GPU Memory**: 18GB available for blockchain processing
-- **CPU Allocation**: 75% blockchain, 25% AI decisions
+**GPU Notes:**
+- If using GPU acceleration, reserve sufficient VRAM for the node (16–20GB VRAM GPUs recommended).
 
-**Performance Targets:**
-- **Verified TPS**: 80K-100K+ (tested and confirmed)
-- **Block Time**: 1 second (AI-optimized)
-- **GPU Utilization**: 95-98% (AI-managed)
-- **Latency**: 15-25ms average
+**Performance Targets (guidance):**
+- **Block Time**: 1 second
 
 **IMPORTANT: You must create a fresh wallet and have the Private Key - it will be needed for the validator setup!**
 

@@ -2,23 +2,7 @@
 
 ## 🔧 Common Issues and Solutions
 
-### AI System Issues
-
-#### TinyLlama 1.1B Not Responding
-**Problem**: AI load balancer not making decisions
-**Solution**:
-```bash
-# Check if vLLM server is running
-curl -H "Content-Type: application/json" \
-  -d '{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","messages":[{"role":"user","content":"test"}]}' \
-  http://localhost:8000/v1/chat/completions
-
-# Start vLLM server if not running
-pip install vllm
-python -m vllm.entrypoints.openai.api_server \
-  --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
-  --port 8000
-```
+### GPU Issues
 
 #### GPU Not Detected
 **Problem**: RTX 4000 SFF Ada not being used
@@ -45,14 +29,6 @@ clinfo
    ```bash
    # Check GPU memory usage
    nvidia-smi
-   # Should show 18GB available for blockchain, 2GB for AI
-   ```
-
-2. **AI System Not Active**:
-   ```bash
-   # Check AI decision logs
-   tail -f Core-Blockchain/logs/ai_decision.log
-   # Should show decisions every 250ms
    ```
 
 3. **Wrong Hardware Configuration**:
@@ -60,17 +36,9 @@ clinfo
    - Ensure 64GB RAM minimum
    - Check 16+ CPU cores
 
-#### High Latency (> 25ms)
+#### High Latency
 **Problem**: Transaction latency too high
-**Solution**:
-```bash
-# Check AI optimization status
-curl -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"splendor_getAIStatus","params":[],"id":1}' \
-  http://localhost:8545
-
-# Should show AI active and GPU utilization 95-98%
-```
+**Solution**: Check system load (CPU/GPU), disk I/O, and batch sizes. Reduce batch size to keep GPU kernels < 50ms and overlap transfers with compute.
 
 #### Diagnose Block Commit Contention
 **Goal**: Identify which phase of the block commit critical section is slow.

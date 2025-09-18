@@ -1,4 +1,4 @@
-# GPU Deployment Guide for 2M+ TPS
+# [Archived] GPU Deployment Guide for 2M+ TPS
 
 This guide ensures proper deployment of the enhanced GPU transaction processing system for achieving 2M+ TPS on production servers.
 
@@ -85,7 +85,7 @@ ls -la common/gpu/lib*.so
 - All Go source files in the node_src directory
 - Configuration files (.env, genesis.json)
 
-## GPU Configuration for 2M+ TPS
+## GPU Configuration (Archived target)
 
 ### Optimal GPU Settings
 ```go
@@ -198,19 +198,9 @@ export LD_LIBRARY_PATH=$PWD/common/gpu:$LD_LIBRARY_PATH
 sudo nvidia-smi --gpu-reset
 ```
 
-## Expected Performance
+## Status Note
 
-### 2M+ TPS Capability
-- **Theoretical Maximum**: 7424 CUDA cores × 270 TPS/core = **2M+ TPS**
-- **Batch Processing**: 800K transactions in ~400ms
-- **Sustained Throughput**: 2M+ TPS with proper GPU utilization
-- **Memory Efficiency**: 18GB VRAM for maximum batch sizes
-
-### Performance Indicators
-- GPU utilization: 95%+ during transaction processing
-- Memory bandwidth: Optimized for sustained throughput
-- Kernel execution: Sub-millisecond per batch
-- CPU-GPU transfer: Overlapped with computation
+This document described a previous, theoretical performance target. The current codebase accelerates parsing and hashing on GPU; signature verification and EVM execution run on CPU for consensus safety. See docs/TECHNICAL_ARCHITECTURE.md for current throughput guidance.
 
 ## Production Deployment Checklist
 

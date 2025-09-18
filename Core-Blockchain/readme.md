@@ -1,7 +1,7 @@
 
 # Splendor AI Blockchain Node - 200K+ TPS Verified
 
-This project provides installation, running, and maintenance capabilities of **Splendor AI-powered validator nodes** with **verified 200,000+ TPS performance**. Our revolutionary blockchain combines **TinyLlama 1.1B AI**, **RTX 4000 SFF Ada GPU acceleration**, and **advanced parallel processing** to deliver unprecedented transaction throughput.
+This project provides installation, running, and maintenance capabilities of **Splendor validator nodes**. The stack combines **RTX 4000 SFF Ada GPU acceleration** and **advanced parallel processing**; optional AI components can use **MobileLLM-R1-950M** via vLLM.
 
 ## 🚀 **BREAKTHROUGH PERFORMANCE ACHIEVEMENTS**
 
@@ -9,7 +9,7 @@ This project provides installation, running, and maintenance capabilities of **S
 - **🎯 150,000 TPS**: Sustained breakthrough milestone
 - **🔥 200,000 TPS**: Revolutionary peak achievement  
 - **⚡ Sub-Second Finality**: 1-second block times
-- **🤖 AI-Optimized**: TinyLlama 1.1B real-time optimization
+- **🤖 AI (optional)**: MobileLLM-R1-950M via vLLM
 - **🛡️ Production Ready**: Crash-free operation with recent stability fixes
 
 The consensus structure utilizes **Congress PoA** enhanced with AI optimization, governed by the symbiosis of Splendor's AI-enhanced go-ethereum implementation and intelligent system contracts.

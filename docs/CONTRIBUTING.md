@@ -25,7 +25,7 @@ make geth
 
 ## 🎯 Contribution Areas
 
-### AI System (TinyLlama 1.1B)
+### AI System (MobileLLM-R1-950M)
 - Improve load balancing decisions
 - Enhance transaction prediction
 - Optimize AI response times
@@ -44,7 +44,7 @@ make geth
 
 ### Commits
 ```bash
-git commit -m "feat(ai): improve TinyLlama decision accuracy"
+git commit -m "feat(ai): improve MobileLLM decision accuracy"
 git commit -m "perf(gpu): optimize CUDA kernels for RTX 4000"
 git commit -m "fix(parallel): resolve worker pool race condition"
 ```

@@ -3,7 +3,7 @@
 [![License: SBSAL](https://img.shields.io/badge/License-SBSAL-red.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.15+-blue.svg)](https://golang.org)
 [![Network Status](https://img.shields.io/badge/Mainnet-Live-brightgreen.svg)](https://mainnet-rpc.splendor.org/)
-[![AI Powered](https://img.shields.io/badge/AI-TinyLlama_1.1B-purple.svg)](docs/GETTING_STARTED.md)
+[![AI Powered](https://img.shields.io/badge/AI-MobileLLM_R1_950M-purple.svg)](docs/GETTING_STARTED.md)
 [![GPU Accelerated](https://img.shields.io/badge/GPU-RTX_4000_SFF_Ada-orange.svg)](docs/GETTING_STARTED.md)
 
 A high-performance blockchain combining AI optimization, GPU acceleration, and advanced parallel processing to deliver verified high-throughput transaction processing with intelligent real-time optimization.
@@ -14,7 +14,7 @@ Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combi
 
 ### Key Features
 
-- **AI-Powered Optimization**: TinyLlama 1.1B AI for real-time load balancing and performance tuning
+- **AI-Powered Optimization**: MobileLLM-R1-950M for real-time load balancing (optional)
 - **GPU Acceleration**: CUDA/OpenCL support with RTX 4000 SFF Ada optimization
 - **High Performance**: 500K-2M+ TPS with AI optimization
 - **Intelligent Load Balancing**: AI-driven CPU/GPU resource allocation
@@ -91,7 +91,7 @@ Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combi
 
 **Testing Environment:**
 - **Hardware**: NVIDIA RTX 4000 SFF Ada Generation (20GB VRAM)
-- **AI Optimization**: TinyLlama 1.1B load balancer active
+- **AI Optimization**: MobileLLM-R1-950M load balancer active
 - **GPU Utilization**: 95-98% efficiency (AI-managed)
 - **Network**: Mainnet configuration with Congress consensus
 
@@ -130,7 +130,7 @@ console.log('Connected to:', network.name, 'Chain ID:', network.chainId);
 
 ### AI System Components
 
-**AI Load Balancer (TinyLlama 1.1B)**
+**AI Load Balancer (MobileLLM-R1-950M)**
 - Real-time optimization with 250ms decision cycles
 - Response time: <250ms via local vLLM
 - Target utilization: 95-98% GPU efficiency
@@ -216,7 +216,7 @@ Splendor uses an AI-enhanced Proof of Authority consensus called "Congress":
 ## Development Roadmap
 
 ### ✅ Completed (2025)
-- **AI Load Balancer Integration**: TinyLlama 1.1B AI system deployed and operational
+- **AI Load Balancer Integration**: MobileLLM-R1-950M AI system deployed and operational
 - **GPU Acceleration**: RTX 4000 SFF Ada optimization with CUDA/OpenCL support
 - **High-Performance Achievement**: Verified 2.35M TPS with 824K sustained throughput
 - **Hybrid Processing**: CPU/GPU/AI coordination system implemented

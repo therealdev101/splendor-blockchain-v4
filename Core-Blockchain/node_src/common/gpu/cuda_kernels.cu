@@ -114,6 +114,7 @@ __global__ void process_transactions_kernel(
     uint32_t* tx_lengths,
     uint8_t* state_data,      // State snapshots for each transaction
     uint8_t* access_lists,    // Access list data
+    uint8_t* signing_hashes,  // 32 bytes per tx (precomputed signing-hash)
     uint8_t* results,
     int batch_size
 ) {
@@ -125,7 +126,7 @@ __global__ void process_transactions_kernel(
     uint32_t length = tx_lengths[idx];
     uint8_t* state = &state_data[idx * 2048]; // 2KB state snapshot per tx
     uint8_t* access_list = &access_lists[idx * 512]; // 512B access list per tx
-    uint8_t* result = &results[idx * 128]; // 128 bytes result per transaction (expanded)
+    uint8_t* result = &results[idx * 160]; // 160 bytes result per transaction (expanded)
     
     // Initialize result structure
     // [0-31]: transaction hash
@@ -134,7 +135,8 @@ __global__ void process_transactions_kernel(
     // [34-41]: gas used (8 bytes LE)
     // [42-73]: return data hash (32 bytes)
     // [74-105]: revert reason hash (32 bytes) 
-    // [106-127]: reserved for future use
+    // [106-137]: signing-hash (32 bytes)
+    // [138-159]: reserved
     
     bool valid = false;
     uint8_t exec_status = 3; // invalid by default
@@ -188,6 +190,13 @@ __global__ void process_transactions_kernel(
     
     // Revert reason hash (32 bytes)
     for (int i = 0; i < 32; i++) result[74 + i] = revert_hash[i];
+    // Signing hash (32 bytes) - provided by host
+    if (signing_hashes) {
+        uint8_t* sh = &signing_hashes[idx * 32];
+        for (int i = 0; i < 32; i++) result[106 + i] = sh[i];
+    } else {
+        for (int i = 0; i < 32; i++) result[106 + i] = 0;
+    }
 }
 
 // RLP helpers and decoder for legacy transactions
@@ -576,122 +585,132 @@ cleanup:
 }
 
 // Enhanced transaction processing with full execution context
-int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, int count, void* results) {
+int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, void* signing_hashes, int count, void* results) {
     if (!txs || !results || count <= 0) {
         return -1;
     }
-    
-    // Declare variables at the beginning
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (count + threadsPerBlock - 1) / threadsPerBlock;
-    uint32_t* h_lengths;
-    
-    // Allocate GPU memory for enhanced processing
-    uint8_t* d_txs;
-    uint32_t* d_lengths;
-    uint8_t* d_state_data;
-    uint8_t* d_access_lists;
-    uint8_t* d_results;
-    
-    size_t txs_size = count * 1024;        // 1KB max per transaction
-    size_t state_size = count * 2048;      // 2KB state snapshot per transaction
-    size_t access_size = count * 512;      // 512B access list per transaction
-    size_t lengths_size = count * sizeof(uint32_t);
-    size_t results_size = count * 128;     // 128 bytes result per transaction (expanded)
-    
+    // Streamed processing with pinned host memory and triple buffering
+    const int threadsPerBlock = 256;
     cudaError_t error;
-    
-    // Allocate transaction data buffer
-    error = cudaMalloc(&d_txs, txs_size);
-    if (error != cudaSuccess) return -1;
-    
-    // Allocate lengths buffer
-    error = cudaMalloc(&d_lengths, lengths_size);
-    if (error != cudaSuccess) {
-        cudaFree(d_txs);
-        return -1;
+
+    // Attempt to pin host buffers for faster transfers (ignore failure)
+    cudaHostRegister(txs, (size_t)count * 1024, cudaHostRegisterPortable);
+    if (tx_lengths) cudaHostRegister(tx_lengths, (size_t)count * sizeof(uint32_t), cudaHostRegisterPortable);
+    if (state_data) cudaHostRegister(state_data, (size_t)count * 2048, cudaHostRegisterPortable);
+    if (access_lists) cudaHostRegister(access_lists, (size_t)count * 512, cudaHostRegisterPortable);
+    if (signing_hashes) cudaHostRegister(signing_hashes, (size_t)count * 32, cudaHostRegisterPortable);
+    cudaHostRegister(results, (size_t)count * 160, cudaHostRegisterPortable);
+
+    // Choose chunk size (~64MB per stream target)
+    size_t per_tx_bytes = 1024 + sizeof(uint32_t) + 2048 + 512 + 32 + 160; // approx
+    size_t target_bytes = 64 * 1024 * 1024; // 64MB
+    int chunk = (int)(target_bytes / per_tx_bytes);
+    if (chunk < 2048) chunk = 2048; // floor
+    if (chunk > count) chunk = count;
+
+    const int numStreams = 3;
+    cudaStream_t streams[numStreams];
+    for (int i = 0; i < numStreams; ++i) cudaStreamCreate(&streams[i]);
+
+    // Allocate triple-buffered device memory for chunks
+    uint8_t* d_txs[numStreams] = {0};
+    uint32_t* d_lengths[numStreams] = {0};
+    uint8_t* d_state[numStreams] = {0};
+    uint8_t* d_access[numStreams] = {0};
+    uint8_t* d_results[numStreams] = {0};
+    uint8_t* d_signhash[numStreams] = {0};
+
+    size_t txs_bytes = (size_t)chunk * 1024;
+    size_t lens_bytes = (size_t)chunk * sizeof(uint32_t);
+    size_t state_bytes = (size_t)chunk * 2048;
+    size_t access_bytes = (size_t)chunk * 512;
+    size_t results_bytes = (size_t)chunk * 160;
+    size_t signhash_bytes = (size_t)chunk * 32;
+
+    for (int i = 0; i < numStreams; ++i) {
+        if ((error = cudaMalloc(&d_txs[i], txs_bytes)) != cudaSuccess) goto stream_cleanup;
+        if ((error = cudaMalloc(&d_lengths[i], lens_bytes)) != cudaSuccess) goto stream_cleanup;
+        if ((error = cudaMalloc(&d_state[i], state_bytes)) != cudaSuccess) goto stream_cleanup;
+        if ((error = cudaMalloc(&d_access[i], access_bytes)) != cudaSuccess) goto stream_cleanup;
+        if ((error = cudaMalloc(&d_results[i], results_bytes)) != cudaSuccess) goto stream_cleanup;
+        if ((error = cudaMalloc(&d_signhash[i], signhash_bytes)) != cudaSuccess) goto stream_cleanup;
     }
-    
-    // Allocate state data buffer
-    error = cudaMalloc(&d_state_data, state_size);
-    if (error != cudaSuccess) {
-        cudaFree(d_txs);
-        cudaFree(d_lengths);
-        return -1;
+
+    int offset = 0;
+    int streamIndex = 0;
+    while (offset < count) {
+        int n = chunk;
+        if (offset + n > count) n = count - offset;
+        cudaStream_t s = streams[streamIndex];
+
+        // Async copy to device for this chunk
+        error = cudaMemcpyAsync(d_txs[streamIndex], (uint8_t*)txs + (size_t)offset * 1024, (size_t)n * 1024, cudaMemcpyHostToDevice, s);
+        if (error != cudaSuccess) goto stream_cleanup;
+        error = cudaMemcpyAsync(d_lengths[streamIndex], (uint32_t*)tx_lengths + offset, (size_t)n * sizeof(uint32_t), cudaMemcpyHostToDevice, s);
+        if (error != cudaSuccess) goto stream_cleanup;
+        if (state_data) {
+            error = cudaMemcpyAsync(d_state[streamIndex], (uint8_t*)state_data + (size_t)offset * 2048, (size_t)n * 2048, cudaMemcpyHostToDevice, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        } else {
+            error = cudaMemsetAsync(d_state[streamIndex], 0, (size_t)n * 2048, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        }
+        if (access_lists) {
+            error = cudaMemcpyAsync(d_access[streamIndex], (uint8_t*)access_lists + (size_t)offset * 512, (size_t)n * 512, cudaMemcpyHostToDevice, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        } else {
+            error = cudaMemsetAsync(d_access[streamIndex], 0, (size_t)n * 512, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        }
+        if (signing_hashes) {
+            error = cudaMemcpyAsync(d_signhash[streamIndex], (uint8_t*)signing_hashes + (size_t)offset * 32, (size_t)n * 32, cudaMemcpyHostToDevice, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        } else {
+            error = cudaMemsetAsync(d_signhash[streamIndex], 0, (size_t)n * 32, s);
+            if (error != cudaSuccess) goto stream_cleanup;
+        }
+
+        // Launch kernel for this chunk
+        int blocksPerGrid = (n + threadsPerBlock - 1) / threadsPerBlock;
+        process_transactions_kernel<<<blocksPerGrid, threadsPerBlock, 0, s>>>(
+            d_txs[streamIndex], d_lengths[streamIndex], d_state[streamIndex], d_access[streamIndex], d_signhash[streamIndex], d_results[streamIndex], n
+        );
+        error = cudaGetLastError();
+        if (error != cudaSuccess) goto stream_cleanup;
+
+        // Async copy results back
+        error = cudaMemcpyAsync((uint8_t*)results + (size_t)offset * 160, d_results[streamIndex], (size_t)n * 160, cudaMemcpyDeviceToHost, s);
+        if (error != cudaSuccess) goto stream_cleanup;
+
+        // Advance
+        offset += n;
+        streamIndex = (streamIndex + 1) % numStreams;
     }
-    
-    // Allocate access lists buffer
-    error = cudaMalloc(&d_access_lists, access_size);
-    if (error != cudaSuccess) {
-        cudaFree(d_txs);
-        cudaFree(d_lengths);
-        cudaFree(d_state_data);
-        return -1;
+
+    // Synchronize all streams
+    for (int i = 0; i < numStreams; ++i) {
+        cudaStreamSynchronize(streams[i]);
     }
-    
-    // Allocate results buffer
-    error = cudaMalloc(&d_results, results_size);
-    if (error != cudaSuccess) {
-        cudaFree(d_txs);
-        cudaFree(d_lengths);
-        cudaFree(d_state_data);
-        cudaFree(d_access_lists);
-        return -1;
+
+    // Cleanup
+stream_cleanup:
+    for (int i = 0; i < numStreams; ++i) {
+        if (d_txs[i]) cudaFree(d_txs[i]);
+        if (d_lengths[i]) cudaFree(d_lengths[i]);
+        if (d_state[i]) cudaFree(d_state[i]);
+        if (d_access[i]) cudaFree(d_access[i]);
+        if (d_results[i]) cudaFree(d_results[i]);
+        if (d_signhash[i]) cudaFree(d_signhash[i]);
+        cudaStreamDestroy(streams[i]);
     }
-    
-    // Copy transaction data to GPU
-    error = cudaMemcpy(d_txs, txs, txs_size, cudaMemcpyHostToDevice);
-    if (error != cudaSuccess) goto cleanup_full;
-    
-    // Copy state data to GPU (if provided)
-    if (state_data) {
-        error = cudaMemcpy(d_state_data, state_data, state_size, cudaMemcpyHostToDevice);
-        if (error != cudaSuccess) goto cleanup_full;
-    } else {
-        // Initialize with zeros if no state data provided
-        error = cudaMemset(d_state_data, 0, state_size);
-        if (error != cudaSuccess) goto cleanup_full;
-    }
-    
-    // Copy access lists to GPU (if provided)
-    if (access_lists) {
-        error = cudaMemcpy(d_access_lists, access_lists, access_size, cudaMemcpyHostToDevice);
-        if (error != cudaSuccess) goto cleanup_full;
-    } else {
-        // Initialize with zeros if no access lists provided
-        error = cudaMemset(d_access_lists, 0, access_size);
-        if (error != cudaSuccess) goto cleanup_full;
-    }
-    
-    // Copy provided lengths from host
-    if (!tx_lengths) { cudaFree(d_txs); cudaFree(d_lengths); cudaFree(d_state_data); cudaFree(d_access_lists); cudaFree(d_results); return -1; }
-    h_lengths = (uint32_t*)tx_lengths;
-    error = cudaMemcpy(d_lengths, h_lengths, lengths_size, cudaMemcpyHostToDevice);
-    if (error != cudaSuccess) goto cleanup_full;
-    
-    // Launch enhanced kernel with full execution context
-    process_transactions_kernel<<<blocksPerGrid, threadsPerBlock>>>(
-        d_txs, d_lengths, d_state_data, d_access_lists, d_results, count
-    );
-    
-    // Check for kernel launch errors
-    error = cudaGetLastError();
-    if (error != cudaSuccess) goto cleanup_full;
-    
-    // Wait for kernel completion
-    error = cudaDeviceSynchronize();
-    if (error != cudaSuccess) goto cleanup_full;
-    
-    // Copy results back to host
-    error = cudaMemcpy(results, d_results, results_size, cudaMemcpyDeviceToHost);
-    
-cleanup_full:
-    cudaFree(d_txs);
-    cudaFree(d_lengths);
-    cudaFree(d_state_data);
-    cudaFree(d_access_lists);
-    cudaFree(d_results);
-    
+    // Unpin (ignore errors)
+    cudaHostUnregister(txs);
+    if (tx_lengths) cudaHostUnregister(tx_lengths);
+    if (state_data) cudaHostUnregister(state_data);
+    if (access_lists) cudaHostUnregister(access_lists);
+    cudaHostUnregister(results);
+    if (signing_hashes) cudaHostUnregister(signing_hashes);
+
     return (error == cudaSuccess) ? 0 : -1;
 }
 

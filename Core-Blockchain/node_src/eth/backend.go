@@ -353,13 +353,13 @@ func makeExtraData(extra []byte) []byte {
 // APIs return the collection of RPC services the ethereum package offers.
 // NOTE, some of these services probably need to be moved to somewhere else.
 func (s *Ethereum) APIs() []rpc.API {
-	apis := ethapi.GetAPIs(s.APIBackend)
+    apis := ethapi.GetAPIs(s.APIBackend)
 
 	// Append any APIs exposed explicitly by the consensus engine
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
 
-	// Append all the local APIs and return
-	return append(apis, []rpc.API{
+    // Append all the local APIs and return
+    return append(apis, []rpc.API{
 		{
 			Namespace: "eth",
 			Version:   "1.0",
@@ -398,13 +398,18 @@ func (s *Ethereum) APIs() []rpc.API {
 			Namespace: "debug",
 			Version:   "1.0",
 			Service:   NewPrivateDebugAPI(s),
-		}, {
-			Namespace: "net",
-			Version:   "1.0",
-			Service:   s.netRPCService,
-			Public:    true,
-		},
-	}...)
+        }, {
+            Namespace: "net",
+            Version:   "1.0",
+            Service:   s.netRPCService,
+            Public:    true,
+        }, {
+            Namespace: "x402",
+            Version:   "1.0",
+            Service:   NewX402API(s),
+            Public:    true,
+        },
+    }...)
 }
 
 func (s *Ethereum) ResetWithGenesisBlock(gb *types.Block) {

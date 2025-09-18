@@ -1,22 +1,23 @@
 package congress
 
 import (
-	"bytes"
-	"errors"
-	"fmt"
-	"github.com/ethereum/go-ethereum/accounts"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/consensus"
-	"github.com/ethereum/go-ethereum/consensus/congress/systemcontract"
-	"github.com/ethereum/go-ethereum/consensus/congress/vmcaller"
-	"github.com/ethereum/go-ethereum/core/state"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/rlp"
-	"math"
-	"math/big"
+    "bytes"
+    "errors"
+    "fmt"
+    "github.com/ethereum/go-ethereum/accounts"
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/common/hexutil"
+    "github.com/ethereum/go-ethereum/consensus"
+    "github.com/ethereum/go-ethereum/consensus/congress/systemcontract"
+    "github.com/ethereum/go-ethereum/consensus/congress/vmcaller"
+    "github.com/ethereum/go-ethereum/core/state"
+    "github.com/ethereum/go-ethereum/core/types"
+    "github.com/ethereum/go-ethereum/core/vm"
+    "github.com/ethereum/go-ethereum/crypto"
+    "github.com/ethereum/go-ethereum/log"
+    "github.com/ethereum/go-ethereum/rlp"
+    "math"
+    "math/big"
 )
 
 // Proposal is the system governance proposal info.
@@ -234,10 +235,61 @@ func (c *Congress) executeEvmCallProposal(chain consensus.ChainHeaderReader, hea
 // ApplySysTx applies a system-transaction using a given evm,
 // the main purpose of this method is for tracing a system-transaction.
 func (c *Congress) ApplySysTx(evm *vm.EVM, state *state.StateDB, txIndex int, sender common.Address, tx *types.Transaction) (ret []byte, vmerr error, err error) {
-	var prop = &Proposal{}
-	if err = rlp.DecodeBytes(tx.Data(), prop); err != nil {
-		return
-	}
+    // Handle native x402 typed settlement envelopes
+    if tx.Type() == types.X402TxType {
+        type x402Payload struct {
+            From        common.Address
+            To          common.Address
+            Value       *big.Int
+            ValidAfter  uint64
+            ValidBefore uint64
+            Nonce       common.Hash
+            Signature   []byte
+        }
+        var p x402Payload
+        if err = rlp.DecodeBytes(tx.Data(), &p); err != nil {
+            return nil, nil, fmt.Errorf("x402: decode payload failed: %v", err)
+        }
+        now := evm.Context.Time.Uint64()
+        if now < p.ValidAfter || now > p.ValidBefore {
+            return nil, nil, errors.New("x402: outside validity window")
+        }
+        // Canonical message per production guide
+        msg := fmt.Sprintf("x402-payment:%s:%s:%s:%d:%d:%s:%d",
+            p.From.Hex(), p.To.Hex(), (*hexutil.Big)(p.Value).String(), p.ValidAfter, p.ValidBefore, p.Nonce.Hex(), c.chainConfig.ChainID.Uint64())
+        sig := make([]byte, len(p.Signature))
+        copy(sig, p.Signature)
+        if len(sig) != 65 {
+            return nil, nil, errors.New("x402: bad signature length")
+        }
+        if sig[64] >= 27 { sig[64] -= 27 }
+        h := accounts.TextHash([]byte(msg))
+        pub, rerr := crypto.SigToPub(h, sig)
+        if rerr != nil { return nil, nil, fmt.Errorf("x402: recover failed: %v", rerr) }
+        if crypto.PubkeyToAddress(*pub) != p.From {
+            return nil, nil, errors.New("x402: recovered address mismatch")
+        }
+        // Anti-replay: keccak(from||nonce) stored under registry address
+        registry := common.HexToAddress("0x0000000000000000000000000000000000000402")
+        key := crypto.Keccak256Hash(append(p.From.Bytes(), p.Nonce.Bytes()...))
+        if state.GetState(registry, key) != (common.Hash{}) {
+            return nil, nil, errors.New("x402: nonce already used")
+        }
+        state.SetState(registry, key, common.BigToHash(big.NewInt(1)))
+        // Apply balance transfer
+        if state.GetBalance(p.From).Cmp(p.Value) < 0 {
+            return nil, nil, errors.New("x402: insufficient balance")
+        }
+        state.SubBalance(p.From, p.Value)
+        state.AddBalance(p.To, p.Value)
+        // Increment validator (sender) nonce to consume the sys-tx
+        evm.StateDB.SetNonce(sender, evm.StateDB.GetNonce(sender)+1)
+        return nil, nil, nil
+    }
+    var prop = &Proposal{}
+    if err = rlp.DecodeBytes(tx.Data(), prop); err != nil {
+        return
+    }
 	evm.Context.ExtraValidator = nil
 	nonce := evm.StateDB.GetNonce(sender)
 	//add nonce for validator

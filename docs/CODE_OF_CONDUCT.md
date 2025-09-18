@@ -24,7 +24,7 @@ The Splendor Blockchain community is committed to providing a welcoming, inclusi
 ## 🎯 Community Focus
 
 Our community is focused on:
-- **AI Innovation**: Advancing TinyLlama 1.1B integration and optimization
+- **AI Innovation**: Advancing MobileLLM-R1-950M integration and optimization
 - **GPU Performance**: Maximizing RTX 4000 SFF Ada capabilities
 - **Parallel Processing**: Improving multi-core transaction processing
 - **High Performance**: Achieving and exceeding 100K+ TPS targets
@@ -85,7 +85,7 @@ If you believe enforcement action was taken in error:
 
 We celebrate contributors who:
 - **Improve Performance**: Achieve measurable TPS or latency improvements
-- **Enhance AI Systems**: Advance TinyLlama integration and optimization
+- **Enhance AI Systems**: Advance MobileLLM-R1-950M integration and optimization
 - **Optimize GPU Usage**: Maximize RTX 4000 SFF Ada utilization
 - **Share Knowledge**: Create helpful documentation and tutorials
 - **Support Community**: Help other developers and users

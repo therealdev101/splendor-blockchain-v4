@@ -11,28 +11,23 @@ RPC (Remote Procedure Call) nodes provide read-only access to the blockchain net
 ### **ACTUAL TESTING HARDWARE REQUIREMENTS**
 
 **Verified RPC Configuration (September 2025):**
-- **GPU**: NVIDIA RTX 4000 SFF Ada Generation (20GB VRAM) - for AI-enhanced RPC
+- **GPU**: NVIDIA RTX 4000 SFF Ada Generation (20GB VRAM)
 - **CPU**: 16+ cores (32+ threads), Intel i5-13500 or equivalent
-- **RAM**: 64GB DDR4 (minimum for AI + GPU + blockchain processing)
+- **RAM**: 32GB+ DDR4 recommended
 - **Storage**: 2TB+ NVMe SSD (enterprise grade for high TPS)
 - **Network**: Gigabit+ connection for 100K+ TPS handling
 - **OS**: Ubuntu 20.04 LTS or 22.04 LTS
 
-**AI-Enhanced RPC Features:**
-- **TinyLlama 1.1B**: AI load balancer for optimal performance
-- **GPU Acceleration**: CUDA/OpenCL support for transaction processing
-- **Parallel Processing**: Multi-core optimization for high throughput
-- **Hybrid Processing**: Intelligent CPU/GPU workload distribution
+**RPC Features:**
+- x402 namespace enabled (native micropayments)
+- GPU acceleration for parsing/hashing (where enabled)
 
 **Performance Capabilities:**
-- **Verified TPS**: 80K-100K+ transaction processing
-- **Response Time**: <25ms average (AI-optimized)
-- **Concurrent Connections**: 1000+ simultaneous RPC calls
-- **Block Time**: 1 second with AI prediction
+- **Concurrent Connections**: 1000+ simultaneous RPC calls (hardware dependent)
+- **Block Time**: 1 second
 
 **Network Ports:**
 - 80 (HTTP RPC), 8545 (WebSocket), 30303 (P2P)
-- 8000 (vLLM AI server for load balancing)
 
 ## Quick Setup
 

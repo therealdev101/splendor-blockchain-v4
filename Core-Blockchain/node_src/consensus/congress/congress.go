@@ -1366,19 +1366,21 @@ func (c *Congress) PreHandle(chain consensus.ChainHeaderReader, header *types.He
 
 // IsSysTransaction checks whether a specific transaction is a system transaction.
 func (c *Congress) IsSysTransaction(sender common.Address, tx *types.Transaction, header *types.Header) (bool, error) {
-	if tx.To() == nil {
-		return false, nil
-	}
-
-	to := tx.To()
-	if sender == header.Coinbase && *to == systemcontract.SysGovToAddr && tx.GasPrice().Sign() == 0 {
-		return true, nil
-	}
-	// Make sure the miner can NOT call the system contract through a normal transaction.
-	if sender == header.Coinbase && *to == systemcontract.SysGovContractAddr {
-		return true, nil
-	}
-	return false, nil
+    // Treat typed x402 envelopes as system transactions (consensus will verify inner signature)
+    if tx.Type() == types.X402TxType {
+        return true, nil
+    }
+    if tx.To() == nil {
+        return false, nil
+    }
+    to := tx.To()
+    if sender == header.Coinbase && *to == systemcontract.SysGovToAddr && tx.GasPrice().Sign() == 0 {
+        return true, nil
+    }
+    if sender == header.Coinbase && *to == systemcontract.SysGovContractAddr {
+        return true, nil
+    }
+    return false, nil
 }
 
 // CanCreate determines where a given address can create a new contract.

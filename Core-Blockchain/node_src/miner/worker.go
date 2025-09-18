@@ -314,7 +314,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// Initialize parallel state processor for advanced parallel processing
 	parallelConfig := core.DefaultParallelProcessorConfig()
 	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
-	// Align with GPU-first plan while reserving capacity for TinyLlama 1.1B
+    // Align with GPU-first plan while reserving capacity for MobileLLM-R1-950M
 	cpuCores := runtime.NumCPU()                           // 20 threads
 	parallelConfig.TxBatchSize = 100000                    // Match GPU-validated batches (100K transactions)
 	parallelConfig.MaxTxConcurrency = cpuCores * 12        // Use ~75% of CPU cores for blockchain execution
@@ -327,7 +327,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		"cpuCores", cpuCores,
 		"maxConcurrency", parallelConfig.MaxTxConcurrency,
 		"maxGoroutines", parallelConfig.MaxGoroutines,
-		"reservedForAI", "25% CPU + 2GB GPU for TinyLlama")
+            "reservedForAI", "25% CPU + 2GB GPU for MobileLLM")
 
 	var err error
 	worker.parallelProcessor, err = core.NewParallelStateProcessor(chainConfig, eth.BlockChain(), engine, parallelConfig)

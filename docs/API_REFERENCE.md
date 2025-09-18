@@ -21,6 +21,14 @@ Splendor Blockchain V4 is fully compatible with Ethereum's JSON-RPC API, making 
 
 ## JSON-RPC API
 
+### X402 (native micropayments)
+
+The native x402 payment API is exposed under the `x402` namespace. For full details, examples and the canonical message format, see: docs/X402_API.md
+
+Methods:
+- `x402_verify` — Validate a payment payload against requirements (no state change)
+- `x402_settle` — Verify and submit a typed 0x50 x402 envelope for on‑chain settlement
+
 ### Standard Ethereum Methods
 
 Splendor supports all standard Ethereum JSON-RPC methods:

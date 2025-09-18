@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/big"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -26,7 +27,7 @@ import (
 // CUDA function declarations (implemented in cuda_kernels.cu)
 int cuda_init_device();
 int cuda_process_transactions(void* txs, int count, void* results);
-int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, int count, void* results);
+int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, void* signing_hashes, int count, void* results);
 int cuda_process_hashes(void* hashes, int count, void* results);
 int cuda_verify_signatures(void* sigs, void* msgs, void* keys, int count, void* results);
 void cuda_cleanup();
@@ -41,7 +42,7 @@ void cleanupCUDA();
 // OpenCL function declarations (implemented in opencl_kernels.c)
 int initOpenCL();
 int processTxBatchOpenCL(void* txData, int txCount, void* results);
-int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, int txCount, void* results);
+int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, void* signingHashes, int txCount, void* results);
 int processHashesOpenCL(void* hashes, int count, void* results);
 int verifySignaturesOpenCL(void* signatures, int count, void* results);
 void cleanupOpenCL();
@@ -98,42 +99,60 @@ type GPUProcessor struct {
 	processedTxs    uint64
 	avgHashTime     time.Duration
 	avgSigTime      time.Duration
-	avgTxTime       time.Duration
+    avgTxTime       time.Duration
 	
-	// Shutdown coordination
+    // Shutdown coordination
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	
-	// Memory management
-	memoryPool      sync.Pool
-	cudaStreams     []unsafe.Pointer
-	openclQueues    []unsafe.Pointer
+    // Memory management
+    memoryPool      sync.Pool
+    cudaStreams     []unsafe.Pointer
+    openclQueues    []unsafe.Pointer
+
+    // Scheduling state
+    enablePerSender bool
+    targetKernelMs  int
+    nextSliceSize   int
+    minSliceSize    int
+    maxSliceSize    int
 }
 
 // GPUConfig holds configuration for GPU processing
 type GPUConfig struct {
-	PreferredGPUType GPUType `json:"preferredGpuType"`
-	MaxBatchSize     int     `json:"maxBatchSize"`
-	MaxMemoryUsage   uint64  `json:"maxMemoryUsage"`
-	HashWorkers      int     `json:"hashWorkers"`
-	SignatureWorkers int     `json:"signatureWorkers"`
-	TxWorkers        int     `json:"txWorkers"`
-	EnablePipelining bool    `json:"enablePipelining"`
+    PreferredGPUType GPUType `json:"preferredGpuType"`
+    MaxBatchSize     int     `json:"maxBatchSize"`
+    MaxMemoryUsage   uint64  `json:"maxMemoryUsage"`
+    HashWorkers      int     `json:"hashWorkers"`
+    SignatureWorkers int     `json:"signatureWorkers"`
+    TxWorkers        int     `json:"txWorkers"`
+    EnablePipelining bool    `json:"enablePipelining"`
+    // Scheduling and slicing
+    EnablePerSenderScheduling bool `json:"enablePerSenderScheduling"`
+    TargetKernelMillis        int  `json:"targetKernelMillis"`
+    InitialSliceSize          int  `json:"initialSliceSize"`
+    MinSliceSize              int  `json:"minSliceSize"`
+    MaxSliceSize              int  `json:"maxSliceSize"`
 }
 
 // DefaultGPUConfig returns optimized GPU configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM)
-// Balanced for blockchain processing + TinyLlama 1.1B AI model with 2GB VRAM reservation
+// Balanced for blockchain processing (optional vLLM with MobileLLM-R1-950M)
 func DefaultGPUConfig() *GPUConfig {
-	return &GPUConfig{
-		PreferredGPUType: GPUTypeCUDA,   // Prefer CUDA for RTX 4000 SFF Ada when available
-		MaxBatchSize:     800000,        // 4x increase - 800K batches (keeps GPU saturated)
-		MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for TinyLlama + system)
-		HashWorkers:      80,            // 80 workers - balance with AI workload
-		SignatureWorkers: 80,            // 80 workers - balance with AI workload
-		TxWorkers:        80,            // 80 workers - balance with AI workload
-		EnablePipelining: true,
-	}
+    return &GPUConfig{
+        PreferredGPUType: GPUTypeCUDA,   // Prefer CUDA for RTX 4000 SFF Ada when available
+        MaxBatchSize:     800000,        // 4x increase - 800K batches (keeps GPU saturated)
+        MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (reserve 2GB if running vLLM)
+        HashWorkers:      80,            // 80 workers - balance with AI workload
+        SignatureWorkers: 80,            // 80 workers - balance with AI workload
+        TxWorkers:        80,            // 80 workers - balance with AI workload
+        EnablePipelining: true,
+        EnablePerSenderScheduling: true,
+        TargetKernelMillis:        50,
+        InitialSliceSize:          65536,
+        MinSliceSize:              4096,
+        MaxSliceSize:              131072,
+    }
 }
 
 // HashBatch represents a batch of hashes to process
@@ -189,15 +208,20 @@ func NewGPUProcessor(config *GPUConfig) (*GPUProcessor, error) {
 	
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	processor := &GPUProcessor{
-		maxBatchSize:   config.MaxBatchSize,
-		maxMemoryUsage: config.MaxMemoryUsage,
-		ctx:            ctx,
-		cancel:         cancel,
-		hashPool:       make(chan *HashBatch, 100),
-		signaturePool:  make(chan *SignatureBatch, 100),
-		txPool:         make(chan *TransactionBatch, 100),
-	}
+    processor := &GPUProcessor{
+        maxBatchSize:   config.MaxBatchSize,
+        maxMemoryUsage: config.MaxMemoryUsage,
+        ctx:            ctx,
+        cancel:         cancel,
+        hashPool:       make(chan *HashBatch, 100),
+        signaturePool:  make(chan *SignatureBatch, 100),
+        txPool:         make(chan *TransactionBatch, 100),
+        enablePerSender: config.EnablePerSenderScheduling,
+        targetKernelMs:  config.TargetKernelMillis,
+        nextSliceSize:   config.InitialSliceSize,
+        minSliceSize:    config.MinSliceSize,
+        maxSliceSize:    config.MaxSliceSize,
+    }
 	
 	log.Debug("Created GPU processor channels", 
 		"hashPoolSize", cap(processor.hashPool),
@@ -956,8 +980,14 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		}
 	}()
 
-	count := len(batch.Transactions)
-	dataStart := time.Now()
+    // If per-sender scheduling is enabled, slice the batch into conflict-free microbatches
+    if p.enablePerSender && len(batch.Transactions) > 0 {
+        p.processTransactionsGPUTiered(batch)
+        return
+    }
+
+    count := len(batch.Transactions)
+    dataStart := time.Now()
 	
     // Prepare transaction data (1KB per transaction)
     log.Trace("Preparing transaction data for GPU processing", "txCount", count)
@@ -965,6 +995,9 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
     defer p.memoryPool.Put(txData)
     // Prepare per-transaction lengths
     txLens := p.prepareTransactionLengths(batch.Transactions)
+
+    // Prepare signing hashes (32B each) using canonical signer on CPU
+    signHashesBuf, _ := p.prepareSigningHashes(batch.Transactions)
 	
 	// Prepare state snapshots (2KB per transaction)
 	log.Trace("Preparing state snapshots for GPU processing")
@@ -1002,8 +1035,8 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"preparationTime", dataPreparationTime,
 	)
 
-	// Enhanced output buffer: 128 bytes per transaction
-	out := make([]byte, count*128)
+	// Enhanced output buffer: 160 bytes per transaction (includes signing-hash)
+	out := make([]byte, count*160)
 	log.Trace("Allocated enhanced transaction output buffer", "size", len(out))
 
 	// Process on GPU with full execution context
@@ -1034,6 +1067,7 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
                 }
                 return nil
             }(),
+            unsafe.Pointer(&signHashesBuf[0]),
             C.int(count),
             unsafe.Pointer(&out[0]),
         ))
@@ -1058,6 +1092,7 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
                 }
                 return nil
             }(),
+            unsafe.Pointer(&signHashesBuf[0]),
             C.int(count),
             unsafe.Pointer(&out[0]),
         ))
@@ -1080,8 +1115,13 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		return
 	}
 
-	// Convert enhanced results
-	log.Trace("Converting enhanced GPU transaction results")
+    // Parallel CPU ECDSA verification using signing-hash from GPU results
+    cpuSigStart := time.Now()
+    sigValid := p.verifyBatchECDSAWithSigningHash(batch.Transactions, out, count)
+    cpuSigTime := time.Since(cpuSigStart)
+
+    // Convert enhanced results
+    log.Trace("Converting enhanced GPU transaction results")
 	conversionStart := time.Now()
 	validCount := 0
 	successCount := 0
@@ -1090,19 +1130,21 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	invalidCount := 0
 	
 	for i := 0; i < count; i++ {
-		offset := i * 128
+		offset := i * 160
 
 		if batch.Results[i] == nil {
 			batch.Results[i] = &TxResult{}
 		}
 		
-		// Enhanced result structure:
-		// [0-31]: transaction hash
-		// [32]: validity flag
-		// [33]: execution status (0=success, 1=revert, 2=out_of_gas, 3=invalid)
-		// [34-41]: gas used (8 bytes LE)
-		// [42-73]: return data hash (32 bytes)
+		// Enhanced result structure (160 bytes):
+		// [0-31]:   transaction hash
+		// [32]:     validity flag
+		// [33]:     execution status (0=success, 1=revert, 2=out_of_gas, 3=invalid)
+		// [34-41]:  gas used (8 bytes LE)
+		// [42-73]:  return data hash (32 bytes)
 		// [74-105]: revert reason hash (32 bytes)
+		// [106-137]: signing-hash (32 bytes)
+		// [138-159]: reserved
 		
 		// Extract transaction hash
 		var txHash common.Hash
@@ -1113,14 +1155,12 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		valid := out[offset+32] != 0
 		execStatus := out[offset+33]
 		
-		// CPU signature verification for safety
-		if valid {
-			if err := p.verifyTxSignatureCPU(batch.Transactions[i]); err != nil {
-				valid = false
-				execStatus = 3 // invalid
-			}
-		}
-		batch.Results[i].Valid = valid
+        // Final validity gate: must pass CPU signature verification
+        if valid && !sigValid[i] {
+            valid = false
+            execStatus = 3 // invalid
+        }
+        batch.Results[i].Valid = valid
 		
 		// Extract gas used
 		gasUsed := binary.LittleEndian.Uint64(out[offset+34 : offset+42])
@@ -1160,7 +1200,7 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	}
 	
 	// Enhanced GPU PERFORMANCE LOG
-	log.Info("✅ ENHANCED GPU TRANSACTION BATCH COMPLETED", 
+    log.Info("✅ ENHANCED GPU TRANSACTION BATCH COMPLETED", 
 		"batchSize", count,
 		"validTransactions", validCount,
 		"successfulExecutions", successCount,
@@ -1169,10 +1209,11 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"invalidTransactions", invalidCount,
 		"gpuType", p.gpuType,
 		"batchTPS", tps,
-		"gpuKernelTime", gpuProcessingTime,
-		"totalProcessingTime", totalTime,
-		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
-	)
+        "gpuKernelTime", gpuProcessingTime,
+        "cpuSigVerifyTime", cpuSigTime,
+        "totalProcessingTime", totalTime,
+        "timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
+    )
 	
 	// Save enhanced performance data to files
 	logging.LogGPU("INFO", "ENHANCED GPU TRANSACTION BATCH COMPLETED", 
@@ -1225,6 +1266,218 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		batch.Callback(batch.Results, nil)
 	}
 }
+
+// processTransactionsGPUTiered schedules txs per-sender to form conflict-free slices
+// and adaptively sizes slices to keep kernel runtime around targetKernelMs.
+func (p *GPUProcessor) processTransactionsGPUTiered(batch *TransactionBatch) {
+    txs := batch.Transactions
+    n := len(txs)
+    results := make([]*TxResult, n)
+    if batch.Results != nil && len(batch.Results) == n {
+        results = batch.Results
+    }
+
+    // Compute senders (parallel recovery)
+    type item struct{ idx int; tx *types.Transaction; sender common.Address; sigOK bool }
+    items := make([]item, n)
+    // Parallel sender recovery using verifyTxSignatureCPU which fills cache for Sender
+    workers := p.configuredSigWorkers()
+    jobs := make(chan int, n)
+    var wg sync.WaitGroup
+    for w := 0; w < workers; w++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for i := range jobs {
+                tx := txs[i]
+                // Derive signer by chain ID
+                chainID := tx.ChainId(); if chainID == nil { chainID = new(big.Int) }
+                signer := types.LatestSignerForChainID(chainID)
+                from, err := types.Sender(signer, tx)
+                if err != nil {
+                    // Leave zero address; mark signature invalid
+                    items[i] = item{idx: i, tx: tx, sigOK: false}
+                    continue
+                }
+                items[i] = item{idx: i, tx: tx, sender: from, sigOK: true}
+            }
+        }()
+    }
+    for i := 0; i < n; i++ { jobs <- i }
+    close(jobs)
+    wg.Wait()
+
+    // Build per-sender queues
+    bySender := make(map[common.Address][]item, n/2)
+    order := make([]common.Address, 0, n/2)
+    for _, it := range items {
+        q := bySender[it.sender]
+        if q == nil {
+            order = append(order, it.sender)
+        }
+        bySender[it.sender] = append(q, it)
+    }
+
+    // Round-robin pop one per sender into slices
+    sliceSize := p.nextSliceSize
+    if sliceSize <= 0 { sliceSize = 65536 }
+    target := time.Duration(p.targetKernelMs) * time.Millisecond
+    var totalValid, totalSuccess, totalRevert, totalOOG, totalInvalid int
+    startBatch := time.Now()
+    var convWG sync.WaitGroup
+
+    for remaining := n; remaining > 0; {
+        // Form a slice
+        sel := make([]item, 0, min(sliceSize, remaining))
+        // maintain list of active senders
+        active := order[:0]
+        for _, s := range order { if len(bySender[s]) > 0 { active = append(active, s) } }
+        order = active
+        for len(sel) < cap(sel) && len(order) > 0 {
+            newOrder := order[:0]
+            for _, s := range order {
+                q := bySender[s]
+                if len(q) == 0 { continue }
+                sel = append(sel, q[0])
+                if len(sel) >= cap(sel) { bySender[s] = q[1:]; newOrder = append(newOrder, s); break }
+                bySender[s] = q[1:]
+                if len(bySender[s]) > 0 { newOrder = append(newOrder, s) }
+            }
+            order = newOrder
+        }
+        if len(sel) == 0 { break }
+
+        // Execute this slice on GPU
+        sliceTxs := make([]*types.Transaction, len(sel))
+        indexMap := make([]int, len(sel))
+        sigOKs := make([]bool, len(sel))
+        for i, it := range sel { sliceTxs[i] = it.tx; indexMap[i] = it.idx; sigOKs[i] = it.sigOK }
+
+        sliceStart := time.Now()
+        // Prepare buffers per slice
+        txData := p.prepareTransactionData(sliceTxs)
+        txLens := p.prepareTransactionLengths(sliceTxs)
+        stateData := p.prepareStateSnapshots(sliceTxs)
+        accessLists := p.prepareAccessLists(sliceTxs)
+        // No signing-hash buffer needed when reusing Sender() validity
+        var signHashesPtr unsafe.Pointer = nil
+        out := make([]byte, len(sliceTxs)*160)
+
+        var rc int
+        switch p.gpuType {
+        case GPUTypeCUDA:
+            rc = int(C.cuda_process_transactions_full(
+                unsafe.Pointer(&txData[0]),
+                unsafe.Pointer(&txLens[0]),
+                func() unsafe.Pointer { if stateData != nil { return unsafe.Pointer(&stateData[0]) }; return nil }(),
+                func() unsafe.Pointer { if accessLists != nil { return unsafe.Pointer(&accessLists[0]) }; return nil }(),
+                signHashesPtr,
+                C.int(len(sliceTxs)),
+                unsafe.Pointer(&out[0]),
+            ))
+        case GPUTypeOpenCL:
+            rc = int(C.processTxBatchOpenCLFull(
+                unsafe.Pointer(&txData[0]),
+                unsafe.Pointer(&txLens[0]),
+                func() unsafe.Pointer { if stateData != nil { return unsafe.Pointer(&stateData[0]) }; return nil }(),
+                func() unsafe.Pointer { if accessLists != nil { return unsafe.Pointer(&accessLists[0]) }; return nil }(),
+                signHashesPtr,
+                C.int(len(sliceTxs)),
+                unsafe.Pointer(&out[0]),
+            ))
+        }
+
+        kernelDur := time.Since(sliceStart)
+        // Release buffers promptly
+        p.memoryPool.Put(txData)
+        if stateData != nil { p.memoryPool.Put(stateData) }
+        if accessLists != nil { p.memoryPool.Put(accessLists) }
+        if rc != 0 {
+            log.Warn("GPU slice failed, falling back to CPU", "size", len(sliceTxs), "err", rc)
+            // CPU fallback per slice
+            tmpBatch := &TransactionBatch{Transactions: sliceTxs, Results: make([]*TxResult, len(sliceTxs))}
+            p.processTransactionsCPU(tmpBatch)
+            for i := range sliceTxs { results[indexMap[i]] = tmpBatch.Results[i] }
+        } else {
+            // Convert and place results asynchronously to overlap with next slice
+            convWG.Add(1)
+            go func(sliceTxs []*types.Transaction, indexMap []int, out []byte, sigOKs []bool) {
+                defer convWG.Done()
+                for i := 0; i < len(sliceTxs); i++ {
+                    off := i * 160
+                    r := results[indexMap[i]]
+                    if r == nil { r = &TxResult{}; results[indexMap[i]] = r }
+                    var h common.Hash; copy(h[:], out[off:off+32]); r.Hash = h
+                    valid := out[off+32] != 0
+                    status := out[off+33]
+                    // Final gate via Sender() result
+                    if valid && !sigOKs[i] { valid = false; status = 3 }
+                    r.Valid = valid
+                    r.GasUsed = binary.LittleEndian.Uint64(out[off+34 : off+42])
+                    switch status {
+                    case 0:
+                        r.Error = nil
+                    case 1:
+                        r.Error = errors.New("execution reverted")
+                    case 2:
+                        r.Error = errors.New("out of gas")
+                    default:
+                        r.Error = errors.New("invalid transaction")
+                    }
+                }
+            }(sliceTxs, indexMap, out, sigOKs)
+        }
+
+        // Adapt slice size to keep under target
+        switch {
+        case kernelDur > target+target/5: // >120% target, reduce 20%
+            sliceSize = max(p.minSliceSize, (sliceSize*80)/100)
+        case kernelDur < target-target/5: // <80% target, increase 10%
+            sliceSize = min(p.maxSliceSize, (sliceSize*110)/100)
+        }
+    }
+
+    // Wait for all conversions to finish
+    convWG.Wait()
+    // Commit adaptive size for next batch
+    p.nextSliceSize = sliceSize
+
+    // Assign back and callback
+    batch.Results = results
+    if batch.Callback != nil {
+        batch.Callback(batch.Results, nil)
+    }
+
+    // Aggregate stats from results
+    totalValid, totalSuccess, totalRevert, totalOOG, totalInvalid = 0, 0, 0, 0, 0
+    for _, r := range results {
+        if r == nil { continue }
+        if r.Valid { totalValid++ }
+        if r.Error == nil { totalSuccess++ } else {
+            switch r.Error.Error() {
+            case "execution reverted": totalRevert++
+            case "out of gas": totalOOG++
+            case "invalid transaction": totalInvalid++
+            }
+        }
+    }
+
+    log.Debug("GPU transaction batch processed (scheduled)",
+        "batchSize", n,
+        "validTxs", totalValid,
+        "successTxs", totalSuccess,
+        "revertTxs", totalRevert,
+        "outOfGasTxs", totalOOG,
+        "invalidTxs", totalInvalid,
+        "gpuType", p.gpuType,
+        "kernelTargetMs", p.targetKernelMs,
+        "finalSliceSize", sliceSize,
+        "totalTime", time.Since(startBatch),
+    )
+}
+
+func min(a, b int) int { if a < b { return a } ; return b }
+func max(a, b int) int { if a > b { return a } ; return b }
 
 // processTransactionsCPU processes transactions using CPU as fallback
 func (p *GPUProcessor) processTransactionsCPU(batch *TransactionBatch) {
@@ -1484,6 +1737,142 @@ func (p *GPUProcessor) verifyTxSignatureCPU(tx *types.Transaction) error {
         return err
     }
     return nil
+}
+
+// verifyBatchSignaturesCPU verifies a batch of transactions' signatures in parallel.
+func (p *GPUProcessor) verifyBatchSignaturesCPU(txs []*types.Transaction) []bool {
+    n := len(txs)
+    results := make([]bool, n)
+    if n == 0 {
+        return results
+    }
+    workers := p.configuredSigWorkers()
+    jobs := make(chan int, n)
+    var wg sync.WaitGroup
+    for w := 0; w < workers; w++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for idx := range jobs {
+                tx := txs[idx]
+                err := p.verifyTxSignatureCPU(tx)
+                results[idx] = (err == nil)
+            }
+        }()
+    }
+    for i := 0; i < n; i++ {
+        jobs <- i
+    }
+    close(jobs)
+    wg.Wait()
+    return results
+}
+
+// configuredSigWorkers picks an appropriate worker count for CPU signature verification.
+func (p *GPUProcessor) configuredSigWorkers() int {
+    // Default to SignatureWorkers if set; else use GOMAXPROCS.
+    workers := runtime.GOMAXPROCS(0)
+    // Try to read from GPUProcessor stats if available (SignatureWorkers exists in config defaults)
+    // Fallback to at least 4 workers
+    if workers < 4 {
+        workers = 4
+    }
+    return workers
+}
+
+// prepareSigningHashes computes the canonical signing-hash for each transaction
+// using the appropriate EIP-155/typed signer and returns a contiguous buffer
+// of 32-byte hashes plus an indexable view.
+func (p *GPUProcessor) prepareSigningHashes(txs []*types.Transaction) ([]byte, [][]byte) {
+    count := len(txs)
+    buf := make([]byte, count*32)
+    views := make([][]byte, count)
+    for i, tx := range txs {
+        chainID := tx.ChainId()
+        if chainID == nil {
+            chainID = new(big.Int)
+        }
+        signer := types.LatestSignerForChainID(chainID)
+        h := signer.Hash(tx)
+        off := i * 32
+        copy(buf[off:off+32], h[:])
+        views[i] = buf[off : off+32]
+    }
+    return buf, views
+}
+
+// verifyBatchECDSAWithSigningHash verifies signatures by recovering the pubkey
+// from the signing-hash returned in the GPU result buffer.
+func (p *GPUProcessor) verifyBatchECDSAWithSigningHash(txs []*types.Transaction, gpuOut []byte, count int) []bool {
+    results := make([]bool, count)
+    workers := p.configuredSigWorkers()
+    jobs := make(chan int, count)
+    var wg sync.WaitGroup
+    for w := 0; w < workers; w++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for i := range jobs {
+                tx := txs[i]
+                // Extract signing-hash from GPU result
+                base := i*160 + 106
+                if base+32 > len(gpuOut) {
+                    results[i] = false
+                    continue
+                }
+                msg := gpuOut[base : base+32]
+                sig, err := buildRecoverySignature(tx)
+                if err != nil {
+                    results[i] = false
+                    continue
+                }
+                if _, err := crypto.SigToPub(msg, sig); err != nil {
+                    results[i] = false
+                } else {
+                    results[i] = true
+                }
+            }
+        }()
+    }
+    for i := 0; i < count; i++ {
+        jobs <- i
+    }
+    close(jobs)
+    wg.Wait()
+    return results
+}
+
+// buildRecoverySignature constructs a 65-byte signature (R||S||Vparity) with V as 0/1
+// suitable for crypto.SigToPub from a tx's raw signature values.
+func buildRecoverySignature(tx *types.Transaction) ([]byte, error) {
+    v, r, s := tx.RawSignatureValues()
+    if v == nil || r == nil || s == nil {
+        return nil, errors.New("missing signature values")
+    }
+    sig := make([]byte, 65)
+    rb := r.Bytes()
+    sb := s.Bytes()
+    if len(rb) > 32 || len(sb) > 32 {
+        return nil, errors.New("invalid r/s length")
+    }
+    copy(sig[32-len(rb):32], rb)
+    copy(sig[64-len(sb):64], sb)
+    // Compute y-parity
+    var parity byte
+    if tx.Type() == 1 || tx.Type() == 2 {
+        parity = byte(new(big.Int).And(v, big.NewInt(1)).Uint64())
+    } else {
+        v64 := v.Uint64()
+        if v64 == 27 || v64 == 28 {
+            parity = byte(v64 - 27)
+        } else if v64 >= 35 {
+            parity = byte((v64 - 35) % 2)
+        } else {
+            parity = byte(v64 % 2)
+        }
+    }
+    sig[64] = parity // SigToPub expects 0/1 here
+    return sig, nil
 }
 
 // prepareStateSnapshots prepares state snapshot data for GPU processing

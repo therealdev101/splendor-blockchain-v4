@@ -49,6 +49,29 @@ progress_bar() {
 source ./.env
 source ~/.bashrc
 
+# Configure geth cache parameters (defaults tuned for ~48GB total)
+# Override via environment: CACHE_MB, CACHE_DB_MB, CACHE_TRIE_MB, CACHE_GC_MB
+CACHE_MB=${CACHE_MB:-49152}
+CACHE_DB_MB=${CACHE_DB_MB:-$(( CACHE_MB*70/100 ))}
+CACHE_TRIE_MB=${CACHE_TRIE_MB:-$(( CACHE_MB*20/100 ))}
+CACHE_GC_MB=${CACHE_GC_MB:-$(( CACHE_MB*10/100 ))}
+
+# Safety clamp: do not exceed ~85% of physical RAM
+if [ -r /proc/meminfo ]; then
+  MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  MEM_TOTAL_MB=$(( MEM_TOTAL_KB / 1024 ))
+  MAX_SAFE_MB=$(( MEM_TOTAL_MB * 85 / 100 ))
+  if [ "$CACHE_MB" -gt "$MAX_SAFE_MB" ]; then
+    echo -e "${ORANGE}⚠️  Requested cache ${CACHE_MB}MB exceeds safe limit (${MAX_SAFE_MB}MB). Clamping.${NC}"
+    CACHE_MB=$MAX_SAFE_MB
+    CACHE_DB_MB=$(( CACHE_MB*70/100 ))
+    CACHE_TRIE_MB=$(( CACHE_MB*20/100 ))
+    CACHE_GC_MB=$(( CACHE_MB*10/100 ))
+  fi
+fi
+
+echo -e "${GREEN}🧠 geth cache configured:${NC} total=${CACHE_MB}MB db=${CACHE_DB_MB}MB trie=${CACHE_TRIE_MB}MB gc=${CACHE_GC_MB}MB"
+
 # Set up CUDA environment by default if GPU is enabled
 if [ "$ENABLE_GPU" = "true" ]; then
   export CUDA_PATH=/usr/local/cuda
@@ -56,6 +79,10 @@ if [ "$ENABLE_GPU" = "true" ]; then
   export PATH=/usr/local/cuda/bin:$PATH
   echo -e "${GREEN}🚀 CUDA environment activated with custom GPU libraries${NC}"
 fi
+# Enable strict x402 verification by default unless overridden
+export X402_STRICT_VERIFY=${X402_STRICT_VERIFY:-1}
+# Default HTTP API list for RPC nodes includes x402 namespace
+HTTP_API_LIST=${HTTP_API_LIST:-"db,eth,net,web3,personal,txpool,miner,debug,x402"}
 #########################################################################
 
 #+-----------------------------------------------------------------------------------------------+
@@ -73,7 +100,7 @@ welcome(){
   echo -e "\t${ORANGE}Total nodes installed: $totalNodes"
   echo -e "${GREEN}
   \t+------------------------------------------------+
-  \t+   DPos node Execution Utility
+  \t+   PoSA node Execution Utility
   \t+   Compatible OS: Ubuntu 20.04+ LTS
   \t+   Your OS: $(. /etc/os-release && printf '%s\n' "${PRETTY_NAME}") 
   \t+   example usage: ./node-start.sh --help
@@ -129,7 +156,7 @@ startRpc(){
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
-        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api db,eth,net,web3,personal,txpool,miner,debug --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
+        tmux send-keys -t node$node_num "./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --port 30303 --ws --ws.addr $IP --ws.origins '*' --ws.port 8545 --http --http.port 80 --rpc.txfeecap 0 --http.corsdomain '*' --nat any --http.api $HTTP_API_LIST --http.addr $IP --vmdebug --pprof --pprof.port 6060 --pprof.addr $IP --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 --ipcpath './chaindata/node$node_num/geth.ipc' console" Enter
       fi
     fi
   done
@@ -160,7 +187,7 @@ startValidator(){
           tmux send-keys -t node$node_num "export PATH=/usr/local/cuda/bin:\$PATH" Enter
           tmux send-keys -t node$node_num "export ENABLE_GPU=true" Enter
         fi
-        tmux send-keys -t node$node_num "LD_LIBRARY_PATH=./node_src/common/gpu:/usr/local/cuda/lib64:\$LD_LIBRARY_PATH ./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=full --gcmode=archive --cache=1024 --cache.database=512 --cache.trie=256 --cache.gc=256 --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 console" Enter
+        tmux send-keys -t node$node_num "LD_LIBRARY_PATH=./node_src/common/gpu:/usr/local/cuda/lib64:\$LD_LIBRARY_PATH ./node_src/build/bin/geth --datadir ./chaindata/node$node_num --networkid $CHAINID --bootnodes $BOOTNODE --mine --port 30303 --nat extip:$IP --gpo.percentile 0 --gpo.maxprice 100 --gpo.ignoreprice 0 --miner.gaslimit 500000000000 --unlock 0 --password ./chaindata/node$node_num/pass.txt --syncmode=full --gcmode=archive --cache=${CACHE_MB} --cache.database=${CACHE_DB_MB} --cache.trie=${CACHE_TRIE_MB} --cache.gc=${CACHE_GC_MB} --txpool.accountslots=1000000 --txpool.globalslots=10000000 --txpool.accountqueue=500000 --txpool.globalqueue=5000000 --maxpeers=25 console" Enter
       fi
     fi
   done
@@ -231,7 +258,7 @@ finalize(){
   # Start vLLM AI service directly
   if [ -d "/opt/vllm-env" ]; then
     echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
-    log_wait "Starting vLLM TinyLlama 1.1B AI load balancer"
+    log_wait "Starting vLLM MobileLLM-R1-950M AI load balancer"
     
     # Check if vLLM is already running
     if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
@@ -244,7 +271,7 @@ finalize(){
       
       # Start vLLM with reduced memory usage and proper configuration
       nohup python -m vllm.entrypoints.openai.api_server \
-        --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+        --model facebook/MobileLLM-R1-950M \
         --host 0.0.0.0 \
         --port 8000 \
         --gpu-memory-utilization 0.1 \
@@ -326,7 +353,7 @@ finalize(){
   # Check AI system based on tracked status
   case "$AI_STATUS" in
     "fully_active")
-      echo -e "${GREEN}✅ AI System: vLLM TinyLlama 1.1B active (150K+ TPS ready)${NC}"
+      echo -e "${GREEN}✅ AI System: vLLM MobileLLM-R1-950M active (150K+ TPS ready)${NC}"
       ;;
     "service_started"|"starting_up")
       echo -e "${GREEN}✅ AI System: vLLM service active (API initializing)${NC}"
