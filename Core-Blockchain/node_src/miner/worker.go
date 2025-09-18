@@ -238,7 +238,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     20000,  // 20K threshold for GPU activation (prevent GPU saturation at 95%/100%)
+		batchThreshold:     10000,  // 10K threshold for GPU activation (matches hybrid processor threshold)
 		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
 		aiOptimization:     true, // Enable AI-driven optimization
 	}
@@ -270,12 +270,12 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
 	// CPU-first strategy to prevent GPU saturation at 400K+ TPS
 	cpuCores := runtime.NumCPU() // 20 threads
-	parallelConfig.TxBatchSize = 50000   // Smaller batches for CPU efficiency
+	parallelConfig.TxBatchSize = 25000   // Reduced batch size to prevent 500MB+ blocks that stall consensus
 	parallelConfig.MaxTxConcurrency = cpuCores * 50  // 1000 concurrent transactions (20 * 50)
 	parallelConfig.MaxMemoryUsage = 16 * 1024 * 1024 * 1024  // 16GB RAM for massive CPU processing
 	parallelConfig.MaxGoroutines = cpuCores * 100   // 2000 goroutines (20 * 100) for 400K+ TPS
-	parallelConfig.StateWorkers = cpuCores * 8      // 160 state workers (20 * 8)
-	parallelConfig.MaxValidationWorkers = cpuCores * 8 // 160 validation workers (20 * 8)
+	parallelConfig.StateWorkers = cpuCores * 4      // 80 state workers (20 * 4) - right-sized for i5-13500
+	parallelConfig.MaxValidationWorkers = cpuCores * 5 // 100 validation workers (20 * 5) - optimized for 20 threads
 	
 	log.Info("Configuring parallel processing for full hardware utilization",
 		"cpuCores", cpuCores,

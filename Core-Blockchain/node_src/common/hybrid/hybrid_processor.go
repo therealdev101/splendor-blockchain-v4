@@ -68,12 +68,12 @@ func DefaultHybridConfig() *HybridConfig {
 		CPUConfig:             gopool.DefaultProcessorConfig(),
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
-		GPUThreshold:          50000,  // 50K threshold - CPU handles bulk work, GPU for acceleration only
-		CPUGPURatio:           0.20,   // 20% GPU, 80% CPU - CPU-first strategy to prevent GPU saturation
+		GPUThreshold:          10000,  // 10K threshold - GPU engages earlier for better load balancing
+		CPUGPURatio:           0.35,   // 35% GPU, 65% CPU - balanced strategy for i5-13500 + RTX 4000
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
 		MaxCPUUtilization:     0.90,   // 90% max CPU usage (i5-13500 can handle this)
-		MaxGPUUtilization:     0.75,   // 75% max GPU usage (prevent saturation at 95%/100%)
+		MaxGPUUtilization:     0.90,   // 90% max GPU usage (RTX 4000 can handle higher utilization)
 		LatencyThreshold:      50 * time.Millisecond,  // Relaxed latency for CPU processing
 		ThroughputTarget:      500000,  // 500K TPS target for 400K+ sustained performance
 		MaxMemoryUsage:        48 * 1024 * 1024 * 1024, // 48GB RAM (leave 14GB for system)
