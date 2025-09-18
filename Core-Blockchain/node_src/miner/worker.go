@@ -238,7 +238,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     10000,  // 10K threshold for GPU activation (matches hybrid processor threshold)
+		batchThreshold:     50000,  // 50K threshold for GPU activation - 5x increase for 200K+ TPS
 		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
 		aiOptimization:     true, // Enable AI-driven optimization
 	}
@@ -880,48 +880,67 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 
 	var coalescedLogs []*types.Log
 
-	// Try GPU batch processing if enabled and we have enough transactions
+	// Multi-batch GPU processing for 200K+ TPS support
 	if w.gpuEnabled && w.hybridProcessor != nil {
 		// Calculate optimal batch size based on performance
 		optimalBatchSize := w.calculateOptimalBatchSize()
-		
-		// Collect transactions into a batch for potential GPU processing
-		var txBatch []*types.Transaction
 		tempTxs := txs
+		totalGPUProcessed := 0
+		batchNumber := 1
 		
-		// Collect up to optimal batch size transactions for GPU processing
-		for len(txBatch) < optimalBatchSize {
-			tx := tempTxs.Peek()
-			if tx == nil {
+		// Continue GPU processing until we run out of transactions or reach gas limit
+		for {
+			// Check if we have enough gas and transactions for another GPU batch
+			if w.current.gasPool.Gas() < params.TxGas {
+				log.Debug("Insufficient gas for more GPU batches", "remaining", w.current.gasPool.Gas())
 				break
 			}
 			
-			// Basic validation before adding to batch
-			from, _ := types.Sender(w.current.signer, tx)
-			if tx.Protected() && !w.chainConfig.IsEIP155(w.current.header.Number) {
-				tempTxs.Pop()
-				continue
-			}
-			if w.isPoSA {
-				if err := w.posa.ValidateTx(from, tx, w.current.header, w.current.state); err != nil {
+			// Collect transactions into a batch for GPU processing
+			var txBatch []*types.Transaction
+			
+			// Collect up to optimal batch size transactions for GPU processing
+			for len(txBatch) < optimalBatchSize {
+				tx := tempTxs.Peek()
+				if tx == nil {
+					break
+				}
+				
+				// Basic validation before adding to batch
+				from, _ := types.Sender(w.current.signer, tx)
+				if tx.Protected() && !w.chainConfig.IsEIP155(w.current.header.Number) {
 					tempTxs.Pop()
 					continue
 				}
+				if w.isPoSA {
+					if err := w.posa.ValidateTx(from, tx, w.current.header, w.current.state); err != nil {
+						tempTxs.Pop()
+						continue
+					}
+				}
+				
+				txBatch = append(txBatch, tx)
+				tempTxs.Shift()
 			}
 			
-			txBatch = append(txBatch, tx)
-			tempTxs.Shift()
-		}
-		
-		// Process batch with GPU if we have enough transactions
-		if len(txBatch) >= w.batchThreshold/2 { // Use GPU for batches >= 500 transactions (1000/2)
+			// Break if we don't have enough transactions for a meaningful GPU batch
+			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
+				log.Debug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
+				// Put transactions back for sequential processing
+				for i := len(txBatch) - 1; i >= 0; i-- {
+					tempTxs.Push(txBatch[i])
+				}
+				break
+			}
+			
+			// Process batch with GPU
 			batchStart := time.Now()
-			log.Debug("Processing transaction batch with GPU acceleration", "batchSize", len(txBatch))
+			log.Info("Processing GPU batch", "batchNumber", batchNumber, "batchSize", len(txBatch), "totalProcessed", totalGPUProcessed)
 			
 			// Use hybrid processor for GPU-accelerated prevalidation
 			err := w.hybridProcessor.ProcessTransactionsBatch(txBatch, func(results []*hybrid.TransactionResult, err error) {
 				if err != nil {
-					log.Warn("GPU batch processing failed, falling back to sequential", "error", err)
+					log.Warn("GPU batch processing failed, falling back to sequential", "batchNumber", batchNumber, "error", err)
 					return
 				}
 				
@@ -944,12 +963,31 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			w.updateBatchPerformance(len(txBatch), batchDuration)
 			
 			if err != nil {
-				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "error", err)
+				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "batchNumber", batchNumber, "error", err)
+				// Put transactions back for sequential processing
+				for i := len(txBatch) - 1; i >= 0; i-- {
+					tempTxs.Push(txBatch[i])
+				}
+				break
 			} else {
-				// GPU batch processing completed, continue with remaining transactions sequentially
-				txs = tempTxs
-				log.Debug("GPU batch processing completed", "batchSize", len(txBatch), "duration", batchDuration)
+				// GPU batch processing completed successfully
+				totalGPUProcessed += len(txBatch)
+				batchNumber++
+				log.Info("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
 			}
+			
+			// Check for interrupts between batches
+			if interrupt != nil && atomic.LoadInt32(interrupt) != commitInterruptNone {
+				log.Debug("GPU batch processing interrupted", "totalProcessed", totalGPUProcessed)
+				break
+			}
+		}
+		
+		// Update txs iterator to remaining transactions after GPU processing
+		txs = tempTxs
+		
+		if totalGPUProcessed > 0 {
+			log.Info("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
 		}
 	}
 
@@ -1369,7 +1407,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 	}
 	
 	// Adjust based on current TPS vs target
-	targetTPS := uint64(100000) // Target 100K TPS for realistic performance
+	targetTPS := uint64(500000) // Target 500K TPS for 200K+ sustained performance
 	if stats.CurrentTPS < targetTPS/2 {
 		// Low TPS, try larger batches
 		baseBatchSize = int(float64(baseBatchSize) * 1.2)
@@ -1389,9 +1427,9 @@ func (w *worker) calculateOptimalBatchSize() int {
 		}
 	}
 	
-	// Enforce bounds
-	minBatchSize := 500
-	maxBatchSize := 10000
+	// Enforce bounds - increased for 200K+ TPS support
+	minBatchSize := 2500  // 5x increase from 500
+	maxBatchSize := 50000 // 5x increase from 10K
 	
 	if baseBatchSize < minBatchSize {
 		baseBatchSize = minBatchSize
