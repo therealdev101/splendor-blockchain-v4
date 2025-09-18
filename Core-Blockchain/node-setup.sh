@@ -162,21 +162,40 @@ task6(){
   
   # Ensure GPU directory exists
   mkdir -p common/gpu
+  # Ensure no leftover stub sources inside the Go package (prevents duplicate symbols)
+  rm -f common/gpu/opencl_stub.c common/gpu/cuda_stub.c
   
   # Build GPU libraries using Makefile.gpu - this creates the .so files that CGO needs
   if make -f Makefile.gpu all 2>/dev/null; then
     log_success "GPU libraries (.so files) built successfully"
   else
     log_wait "GPU libraries not available, creating stub libraries for compilation"
-    
-    # Create minimal stub libraries so CGO linking doesn't fail
-    echo "int cuda_init_device() { return -1; }" > common/gpu/cuda_stub.c
-    echo "int initOpenCL() { return -1; }" > common/gpu/opencl_stub.c
-    
-    # Compile stub libraries
-    gcc -shared -fPIC -o common/gpu/libcuda_kernels.so common/gpu/cuda_stub.c 2>/dev/null || touch common/gpu/libcuda_kernels.so
-    gcc -shared -fPIC -o common/gpu/libopencl_kernels.so common/gpu/opencl_stub.c 2>/dev/null || touch common/gpu/libopencl_kernels.so
-    
+    # Create minimal stub libraries OUTSIDE the Go package so cgo won't compile them
+    STUBDIR=$(mktemp -d)
+    cat > "$STUBDIR/cuda_stub.c" <<'EOF'
+int cuda_init_device() { return -1; }
+int cuda_process_hashes(void* hashes, int count, void* results) { return -1; }
+int cuda_verify_signatures(void* sigs, void* msgs, void* keys, int count, void* results) { return -1; }
+int cuda_process_transactions(void* txs, int count, void* results) { return -1; }
+int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, void* signing_hashes, int count, void* results) { return -1; }
+void cuda_cleanup() {}
+EOF
+    cat > "$STUBDIR/opencl_stub.c" <<'EOF'
+int initOpenCL() { return -1; }
+int processTxBatchOpenCL(void* txData, int txCount, void* results) { return -1; }
+int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, void* signingHashes, int txCount, void* results) { return -1; }
+int processHashesOpenCL(void* hashes, int count, void* results) { return -1; }
+int verifySignaturesOpenCL(void* signatures, int count, void* results) { return -1; }
+void cleanupOpenCL() {}
+EOF
+
+    # Compile stub libraries into the expected locations
+    gcc -shared -fPIC -o common/gpu/libcuda_kernels.so "$STUBDIR/cuda_stub.c" 2>/dev/null || touch common/gpu/libcuda_kernels.so
+    gcc -shared -fPIC -o common/gpu/libopencl_kernels.so "$STUBDIR/opencl_stub.c" 2>/dev/null || touch common/gpu/libopencl_kernels.so
+
+    # Remove temporary stub sources
+    rm -rf "$STUBDIR"
+
     log_success "Stub GPU libraries created for compilation"
   fi
   
@@ -185,7 +204,7 @@ task6(){
     log_wait "Building geth with GPU library support"
     
     # Build geth - the CGO flags in gpu_processor.go will handle linking
-    if go run build/ci.go install ./cmd/geth; then
+    if go run build/ci.go install; then
       log_success "Geth built successfully with GPU library support"
     else
       log_wait "Go build failed, trying standard make"
@@ -492,6 +511,9 @@ task6_gpu(){
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
 
+  # Clean any leftover stub sources to avoid duplicate symbol issues
+  rm -f common/gpu/opencl_stub.c common/gpu/cuda_stub.c
+
   # Build GPU components using our updated Makefile.gpu
   if command -v nvcc >/dev/null 2>&1; then
     log_wait "Building GPU libraries (CUDA + OpenCL) with proper linking"
@@ -501,7 +523,7 @@ task6_gpu(){
       log_success "GPU libraries (.so files) built successfully"
       
       # Build geth with GPU support - CGO flags in gpu_processor.go handle linking
-      if go run build/ci.go install ./cmd/geth; then
+      if go run build/ci.go install; then
         log_success "GPU acceleration components built successfully"
       else
         log_wait "GPU build will complete after system reboot (driver activation required)"
