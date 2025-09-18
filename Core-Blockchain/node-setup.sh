@@ -157,31 +157,24 @@ task6(){
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
   
-  # First, compile CUDA kernels if CUDA is available
+  # Build GPU libraries first using our updated Makefile.gpu
   if command -v nvcc >/dev/null 2>&1; then
-    log_wait "Compiling CUDA kernels for GPU acceleration"
+    log_wait "Building GPU libraries (CUDA + OpenCL) for acceleration"
     
-    # Build CUDA objects and library using the correct Makefile
-    if make -f Makefile.cuda cuda-objects && make -f Makefile.cuda cuda-lib; then
-      log_success "CUDA library compiled successfully"
-      log_wait "Building geth with GPU support and proper CUDA linking"
+    # Build both CUDA and OpenCL shared libraries using Makefile.gpu
+    if make -f Makefile.gpu all; then
+      log_success "GPU libraries (.so files) built successfully"
+      log_wait "Building geth with GPU support"
       
-      # Build geth with proper CUDA linking
-      if CGO_CFLAGS="-I/usr/local/cuda/include" CGO_LDFLAGS="-L/usr/local/cuda/lib64 -L./common/gpu -lcuda -lcudart -lsplendor_cuda" go build -tags gpu -o build/bin/geth ./cmd/geth; then
-        log_success "Geth built successfully with CUDA support"
-        
-        # Verify CUDA linking
-        if ldd build/bin/geth | grep -q "libcudart"; then
-          log_success "CUDA runtime properly linked to geth binary"
-        else
-          log_wait "CUDA linking verification failed, but binary should work"
-        fi
+      # Build geth with GPU support - the CGO flags in gpu_processor.go will handle linking
+      if go run build/ci.go install ./cmd/geth; then
+        log_success "Geth built successfully with GPU support"
       else
         log_wait "GPU build failed, falling back to standard build"
         go run build/ci.go install ./cmd/geth
       fi
     else
-      log_wait "CUDA compilation failed, building CPU-only version"
+      log_wait "GPU library build failed, building CPU-only version"
       go run build/ci.go install ./cmd/geth || make all
     fi
   else
@@ -485,25 +478,17 @@ task6_gpu(){
   export PATH=$CUDA_PATH/bin:$PATH
   export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
 
-  # Build GPU components using the correct Makefile.cuda
+  # Build GPU components using our updated Makefile.gpu
   if command -v nvcc >/dev/null 2>&1; then
-    log_wait "Building CUDA components with proper linking"
+    log_wait "Building GPU libraries (CUDA + OpenCL) with proper linking"
     
-    # Clean and build CUDA objects and library
-    make -f Makefile.cuda clean-cuda || true
-    if make -f Makefile.cuda cuda-objects && make -f Makefile.cuda cuda-lib; then
-      log_success "CUDA library built successfully"
+    # Build both CUDA and OpenCL shared libraries using Makefile.gpu
+    if make -f Makefile.gpu all; then
+      log_success "GPU libraries (.so files) built successfully"
       
-      # Build geth with CUDA support
-      if CGO_CFLAGS="-I/usr/local/cuda/include" CGO_LDFLAGS="-L/usr/local/cuda/lib64 -L./common/gpu -lcuda -lcudart -lsplendor_cuda" go build -tags gpu -o build/bin/geth ./cmd/geth; then
-        log_success "GPU acceleration components built successfully with CUDA linking"
-        
-        # Verify CUDA linking
-        if ldd build/bin/geth | grep -q "libcudart"; then
-          log_success "CUDA runtime properly linked to geth binary"
-        else
-          log_wait "CUDA linking verification failed, but binary should work"
-        fi
+      # Build geth with GPU support - CGO flags in gpu_processor.go handle linking
+      if go run build/ci.go install ./cmd/geth; then
+        log_success "GPU acceleration components built successfully"
       else
         log_wait "GPU build will complete after system reboot (driver activation required)"
       fi
