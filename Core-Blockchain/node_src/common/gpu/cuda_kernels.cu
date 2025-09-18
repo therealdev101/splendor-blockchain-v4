@@ -33,6 +33,14 @@ __device__ uint64_t rotl64(uint64_t x, int n) {
     return (x << n) | (x >> (64 - n));
 }
 
+// Forward declarations for device functions
+__device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit);
+__device__ void compute_transaction_hash(uint8_t* tx_data, uint32_t length, uint32_t* hash_out);
+__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length, uint8_t* state_data);
+__device__ uint8_t execute_evm_transaction(uint8_t* tx_data, uint32_t length, uint8_t* state_data, uint8_t* access_list, uint64_t* gas_used, uint32_t* return_hash, uint32_t* revert_hash);
+__device__ void keccak_f1600_simplified(uint64_t state[25]);
+__device__ void compute_simple_hash(uint8_t* data, uint32_t length, uint32_t* hash_out);
+
 // CUDA kernel for Keccak-256 hashing
 __global__ void keccak256_batch_kernel(
     uint8_t* input_data, 
