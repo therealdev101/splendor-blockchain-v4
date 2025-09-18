@@ -61,22 +61,23 @@ type HybridConfig struct {
 	GPUMemoryReservation   uint64  `json:"gpuMemoryReservation"`   // Reserved GPU memory
 }
 
-// DefaultHybridConfig returns optimized hybrid configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM) and 16+ core CPUs
+// DefaultHybridConfig returns optimized hybrid configuration for i5-13500 (20 threads) + RTX 4000 SFF Ada
+// CPU-first strategy to prevent GPU saturation and handle 400K+ TPS
 func DefaultHybridConfig() *HybridConfig {
 	return &HybridConfig{
 		CPUConfig:             gopool.DefaultProcessorConfig(),
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
-		GPUThreshold:          500,   // 10x lower - Use GPU for batches >= 500 (massive GPU utilization)
-		CPUGPURatio:           0.90,  // 90% GPU, 10% CPU for maximum GPU utilization
+		GPUThreshold:          50000,  // 50K threshold - CPU handles bulk work, GPU for acceleration only
+		CPUGPURatio:           0.20,   // 20% GPU, 80% CPU - CPU-first strategy to prevent GPU saturation
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
-		MaxCPUUtilization:     0.95,  // 95% max CPU usage (higher utilization)
-		MaxGPUUtilization:     0.98,  // 98% max GPU usage (push RTX 4000 SFF Ada to limits)
-		LatencyThreshold:      25 * time.Millisecond,  // 2x faster latency target
-		ThroughputTarget:      10000000, // 10M TPS target (2x increase)
-		MaxMemoryUsage:        64 * 1024 * 1024 * 1024, // 64GB total system memory
-		GPUMemoryReservation:  18 * 1024 * 1024 * 1024, // 18GB GPU reserved (RTX 4000 SFF Ada 20GB)
+		MaxCPUUtilization:     0.90,   // 90% max CPU usage (i5-13500 can handle this)
+		MaxGPUUtilization:     0.75,   // 75% max GPU usage (prevent saturation at 95%/100%)
+		LatencyThreshold:      50 * time.Millisecond,  // Relaxed latency for CPU processing
+		ThroughputTarget:      500000,  // 500K TPS target for 400K+ sustained performance
+		MaxMemoryUsage:        48 * 1024 * 1024 * 1024, // 48GB RAM (leave 14GB for system)
+		GPUMemoryReservation:  12 * 1024 * 1024 * 1024, // 12GB GPU reserved (leave 8GB for AI)
 	}
 }
 

@@ -238,7 +238,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     1000,  // 1K threshold for GPU activation (500+ transactions trigger GPU)
+		batchThreshold:     20000,  // 20K threshold for GPU activation (prevent GPU saturation at 95%/100%)
 		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
 		aiOptimization:     true, // Enable AI-driven optimization
 	}
@@ -267,14 +267,15 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	
 	// Initialize parallel state processor for advanced parallel processing
 	parallelConfig := core.DefaultParallelProcessorConfig()
-	// Optimize for full CPU utilization while reserving resources for TinyLlama 1.1B
-	cpuCores := runtime.NumCPU()
-	parallelConfig.TxBatchSize = 100000  // 1000x larger - match GPU's capability
-	parallelConfig.MaxTxConcurrency = cpuCores * 12  // Use 75% of CPU cores (leave 25% for AI)
-	parallelConfig.MaxMemoryUsage = 6 * 1024 * 1024 * 1024  // 6GB RAM (leave room for AI)
-	parallelConfig.MaxGoroutines = cpuCores * 24    // Aggressive parallelization
-	parallelConfig.StateWorkers = cpuCores * 2      // Full CPU state processing
-	parallelConfig.MaxValidationWorkers = cpuCores * 2 // Full CPU validation
+	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
+	// CPU-first strategy to prevent GPU saturation at 400K+ TPS
+	cpuCores := runtime.NumCPU() // 20 threads
+	parallelConfig.TxBatchSize = 50000   // Smaller batches for CPU efficiency
+	parallelConfig.MaxTxConcurrency = cpuCores * 50  // 1000 concurrent transactions (20 * 50)
+	parallelConfig.MaxMemoryUsage = 16 * 1024 * 1024 * 1024  // 16GB RAM for massive CPU processing
+	parallelConfig.MaxGoroutines = cpuCores * 100   // 2000 goroutines (20 * 100) for 400K+ TPS
+	parallelConfig.StateWorkers = cpuCores * 8      // 160 state workers (20 * 8)
+	parallelConfig.MaxValidationWorkers = cpuCores * 8 // 160 validation workers (20 * 8)
 	
 	log.Info("Configuring parallel processing for full hardware utilization",
 		"cpuCores", cpuCores,
