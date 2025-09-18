@@ -74,7 +74,7 @@ welcome(){
   echo -e "${GREEN}
   \t+------------------------------------------------+
   \t+   DPos node Execution Utility
-  \t+   Target OS: Ubuntu 20.04 LTS (Focal Fossa)
+  \t+   Compatible OS: Ubuntu 20.04+ LTS
   \t+   Your OS: $(. /etc/os-release && printf '%s\n' "${PRETTY_NAME}") 
   \t+   example usage: ./node-start.sh --help
   \t+------------------------------------------------+

@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/logging"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -920,6 +921,21 @@ func (p *GPUProcessor) processSignaturesCPU(batch *SignatureBatch) {
 
 // processTransactionsGPU processes transactions using GPU
 func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
+	// GPU ACTIVATION LOG - This proves GPU is processing real transactions
+	log.Info("🚀 GPU TRANSACTION PROCESSING ACTIVATED", 
+		"batchSize", len(batch.Transactions),
+		"gpuType", p.gpuType,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
+		"deviceCount", p.deviceCount,
+	)
+	
+	// Save to GPU log file
+	logging.LogGPU("INFO", "GPU TRANSACTION PROCESSING ACTIVATED", 
+		"batchSize", len(batch.Transactions),
+		"gpuType", p.gpuType,
+		"deviceCount", p.deviceCount,
+	)
+	
 	log.Debug("Starting GPU transaction processing", 
 		"batchSize", len(batch.Transactions),
 		"gpuType", p.gpuType,
@@ -1045,6 +1061,51 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	}
 	conversionTime := time.Since(conversionStart)
 	
+	// Calculate TPS for this batch
+	totalTime := time.Since(dataStart)
+	var tps float64
+	if totalTime > 0 {
+		tps = float64(count) / totalTime.Seconds()
+	}
+	
+	// GPU PERFORMANCE LOG - This shows actual GPU processing performance
+	log.Info("✅ GPU TRANSACTION BATCH COMPLETED", 
+		"batchSize", count,
+		"validTransactions", validCount,
+		"invalidTransactions", count-validCount,
+		"gpuType", p.gpuType,
+		"batchTPS", tps,
+		"gpuKernelTime", gpuProcessingTime,
+		"totalProcessingTime", totalTime,
+		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
+	)
+	
+	// Save performance data to files
+	logging.LogGPU("INFO", "GPU TRANSACTION BATCH COMPLETED", 
+		"batchSize", count,
+		"validTransactions", validCount,
+		"invalidTransactions", count-validCount,
+		"gpuType", p.gpuType,
+		"batchTPS", tps,
+		"gpuKernelTime", gpuProcessingTime,
+		"totalProcessingTime", totalTime,
+	)
+	
+	logging.LogPerformance("INFO", "BATCH PERFORMANCE METRICS", 
+		"batchSize", count,
+		"batchTPS", tps,
+		"processingMode", "GPU",
+		"kernelTime", gpuProcessingTime,
+		"totalTime", totalTime,
+	)
+	
+	logging.LogTransaction("INFO", "TRANSACTION BATCH PROCESSED", 
+		"batchSize", count,
+		"validTransactions", validCount,
+		"invalidTransactions", count-validCount,
+		"processingMode", "GPU",
+	)
+	
 	log.Debug("GPU transaction processing completed successfully", 
 		"batchSize", count,
 		"validTransactions", validCount,
@@ -1053,7 +1114,8 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"dataPreparationTime", dataPreparationTime,
 		"gpuProcessingTime", gpuProcessingTime,
 		"conversionTime", conversionTime,
-		"totalTime", time.Since(dataStart),
+		"totalTime", totalTime,
+		"batchTPS", tps,
 	)
 
 	if batch.Callback != nil {
@@ -1339,6 +1401,21 @@ func (p *GPUProcessor) updateTxStats(duration time.Duration) {
 		p.avgTxTime = duration
 	} else {
 		p.avgTxTime = (p.avgTxTime + duration) / 2
+	}
+	
+	// Log cumulative GPU statistics every 1000 transactions
+	if p.processedTxs%1000 == 0 {
+		log.Info("📊 GPU CUMULATIVE STATISTICS", 
+			"totalTransactionsProcessed", p.processedTxs,
+			"totalHashesProcessed", p.processedHashes,
+			"totalSignaturesProcessed", p.processedSigs,
+			"avgTransactionTime", p.avgTxTime,
+			"avgHashTime", p.avgHashTime,
+			"avgSignatureTime", p.avgSigTime,
+			"gpuType", p.gpuType,
+			"deviceCount", p.deviceCount,
+			"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
+		)
 	}
 }
 

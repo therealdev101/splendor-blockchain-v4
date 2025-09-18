@@ -48,6 +48,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/ai"
 	"github.com/ethereum/go-ethereum/common/gpu"
 	"github.com/ethereum/go-ethereum/common/hybrid"
+	"github.com/ethereum/go-ethereum/common/logging"
 
 	"gopkg.in/urfave/cli.v1"
 )
@@ -489,6 +490,19 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 	}
 
 	log.Info("Initializing GPU acceleration from environment...")
+	
+	// Initialize comprehensive file logging system
+	logDir := "/root/blockchain-logs"
+	if err := logging.InitFileLogger(logDir); err != nil {
+		log.Warn("Failed to initialize file logging", "error", err, "logDir", logDir)
+	} else {
+		log.Info("File logging system initialized", "logDir", logDir)
+		logging.LogSystem("INFO", "BLOCKCHAIN NODE STARTUP", 
+			"nodeType", "geth",
+			"gpuEnabled", true,
+			"logDir", logDir,
+		)
+	}
 
 	// Map preferred GPU type
 	gpuType := func() gpu.GPUType {

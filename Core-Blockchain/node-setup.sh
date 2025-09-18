@@ -678,7 +678,7 @@ displayWelcome(){
   echo -e "${GREEN}
   \t+------------------------------------------------+
   \t+   DPos node installation Wizard
-  \t+   Target OS: Ubuntu 20.04 LTS (Focal Fossa)
+  \t+   Compatible OS: Ubuntu 20.04+ LTS
   \t+   Your OS: $(. /etc/os-release && printf '%s\n' "${PRETTY_NAME}") 
   \t+------------------------------------------------+
   ${NC}\n"
@@ -1027,7 +1027,9 @@ verify_installation(){
     echo -e "${GREEN}║  • AI system (vLLM + TinyLlama 1.1B)                       ║${NC}"
     echo -e "${GREEN}║  • Node.js ecosystem (yarn + pm2)                          ║${NC}"
     echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  Ready to start with: ./node-start.sh                      ║${NC}"
+    echo -e "${GREEN}║  Infrastructure ready! Next steps:                         ║${NC}"
+    echo -e "${GREEN}║  1. Create nodes: ./node-setup.sh --rpc or --validator     ║${NC}"
+    echo -e "${GREEN}║  2. Start nodes: ./node-start.sh --rpc or --validator      ║${NC}"
   else
     echo -e "${RED}║                    ❌ VERIFICATION FAILED                    ║${NC}"
     echo -e "${RED}║                                                              ║${NC}"
