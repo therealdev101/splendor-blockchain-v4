@@ -22,6 +22,7 @@ import (
 	"errors"
 	"math/big"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,8 @@ import (
 
 	mapset "github.com/deckarep/golang-set"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/ai"
+	"github.com/ethereum/go-ethereum/common/hybrid"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
@@ -36,10 +39,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/common/hybrid"
-	"github.com/ethereum/go-ethereum/common/ai"
 )
 
 const (
@@ -48,7 +50,7 @@ const (
 
 	// txChanSize is the size of channel listening to NewTxsEvent.
 	// The number is referenced from the size of tx pool.
-	txChanSize = 100000  // 24x increase for massive transaction volumes
+	txChanSize = 100000 // 24x increase for massive transaction volumes
 
 	// chainHeadChanSize is the size of channel listening to ChainHeadEvent.
 	chainHeadChanSize = 100
@@ -64,11 +66,11 @@ const (
 
 	// minRecommitInterval is the minimal time interval to recreate the mining block with
 	// any newly arrived transactions.
-	minRecommitInterval = 50 * time.Millisecond  // 20x faster for high TPS
+	minRecommitInterval = 50 * time.Millisecond // 20x faster for high TPS
 
 	// maxRecommitInterval is the maximum time interval to recreate the mining block with
 	// any newly arrived transactions.
-	maxRecommitInterval = 500 * time.Millisecond  // 30x faster for high TPS
+	maxRecommitInterval = 500 * time.Millisecond // 30x faster for high TPS
 
 	// intervalAdjustRatio is the impact a single interval adjustment has on sealing work
 	// resubmitting interval.
@@ -80,6 +82,23 @@ const (
 
 	// staleThreshold is the maximum depth of the acceptable stale block.
 	staleThreshold = 7
+
+	// blockWriteRetryInitialBackoff defines the first delay used when retrying
+	// to persist a sealed block after a transient interruption.
+	blockWriteRetryInitialBackoff = 5 * time.Millisecond
+
+	// blockWriteRetryMaxBackoff caps the exponential backoff applied between
+	// subsequent persistence attempts of the same block.
+	blockWriteRetryMaxBackoff = time.Second
+
+	// blockWriteRetryMaxExponent bounds the bit shift applied when computing
+	// the exponential backoff to avoid overflowing the duration.
+	blockWriteRetryMaxExponent = 16
+)
+
+var (
+	blockPersistenceRetryMeter = metrics.NewRegisteredMeter("miner/block/persist/retries", nil)
+	blockPersistenceQueueGauge = metrics.NewRegisteredGauge("miner/block/persist/pending", nil)
 )
 
 // environment is the worker's current environment and holds all of the current state information.
@@ -106,6 +125,31 @@ type task struct {
 	state     *state.StateDB
 	block     *types.Block
 	createdAt time.Time
+}
+
+type sealedResult struct {
+	block       *types.Block
+	receipts    []*types.Receipt
+	logs        []*types.Log
+	state       *state.StateDB
+	createdAt   time.Time
+	sealhash    common.Hash
+	attempts    int
+	nextAttempt time.Time
+}
+
+func blockPersistenceBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		attempt = 1
+	}
+	if attempt > blockWriteRetryMaxExponent {
+		attempt = blockWriteRetryMaxExponent
+	}
+	backoff := blockWriteRetryInitialBackoff << uint(attempt-1)
+	if backoff > blockWriteRetryMaxBackoff {
+		return blockWriteRetryMaxBackoff
+	}
+	return backoff
 }
 
 const (
@@ -141,15 +185,15 @@ type worker struct {
 	isPoSA bool
 
 	// GPU/Hybrid processing integration
-	hybridProcessor    *hybrid.HybridProcessor
-	parallelProcessor  *core.ParallelStateProcessor
-	aiLoadBalancer     *ai.AILoadBalancer
-	gpuEnabled         bool
-	batchThreshold     int
-	lastBatchSize      int
-	lastBatchTime      time.Duration
-	adaptiveBatching   bool
-	aiOptimization     bool
+	hybridProcessor   *hybrid.HybridProcessor
+	parallelProcessor *core.ParallelStateProcessor
+	aiLoadBalancer    *ai.AILoadBalancer
+	gpuEnabled        bool
+	batchThreshold    int
+	lastBatchSize     int
+	lastBatchTime     time.Duration
+	adaptiveBatching  bool
+	aiOptimization    bool
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -238,11 +282,11 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     50000,  // 50K threshold for GPU activation - 5x increase for 200K+ TPS
+		batchThreshold:     50000, // 50K threshold for GPU activation - 5x increase for 200K+ TPS
 		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
-		aiOptimization:     true, // Enable AI-driven optimization
+		aiOptimization:     true,  // Enable AI-driven optimization
 	}
-	
+
 	// Initialize hybrid processor for GPU acceleration
 	hybridProcessor := hybrid.GetGlobalHybridProcessor()
 	if hybridProcessor != nil {
@@ -254,7 +298,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	} else {
 		log.Info("Miner running in CPU-only mode")
 	}
-	
+
 	// Initialize AI load balancer for intelligent optimization
 	aiLoadBalancer := ai.GetGlobalAILoadBalancer()
 	if aiLoadBalancer != nil {
@@ -264,32 +308,32 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		log.Info("Miner AI optimization not available")
 		worker.aiOptimization = false
 	}
-	
+
 	// Initialize parallel state processor for advanced parallel processing
 	parallelConfig := core.DefaultParallelProcessorConfig()
 	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
 	// CPU-first strategy to prevent GPU saturation at 400K+ TPS
-	cpuCores := runtime.NumCPU() // 20 threads
-	parallelConfig.TxBatchSize = 25000   // Reduced batch size to prevent 500MB+ blocks that stall consensus
-	parallelConfig.MaxTxConcurrency = cpuCores * 50  // 1000 concurrent transactions (20 * 50)
-	parallelConfig.MaxMemoryUsage = 16 * 1024 * 1024 * 1024  // 16GB RAM for massive CPU processing
-	parallelConfig.MaxGoroutines = cpuCores * 100   // 2000 goroutines (20 * 100) for 400K+ TPS
-	parallelConfig.StateWorkers = cpuCores * 4      // 80 state workers (20 * 4) - right-sized for i5-13500
-	parallelConfig.MaxValidationWorkers = cpuCores * 5 // 100 validation workers (20 * 5) - optimized for 20 threads
-	
+	cpuCores := runtime.NumCPU()                            // 20 threads
+	parallelConfig.TxBatchSize = 25000                      // Reduced batch size to prevent 500MB+ blocks that stall consensus
+	parallelConfig.MaxTxConcurrency = cpuCores * 50         // 1000 concurrent transactions (20 * 50)
+	parallelConfig.MaxMemoryUsage = 16 * 1024 * 1024 * 1024 // 16GB RAM for massive CPU processing
+	parallelConfig.MaxGoroutines = cpuCores * 100           // 2000 goroutines (20 * 100) for 400K+ TPS
+	parallelConfig.StateWorkers = cpuCores * 4              // 80 state workers (20 * 4) - right-sized for i5-13500
+	parallelConfig.MaxValidationWorkers = cpuCores * 5      // 100 validation workers (20 * 5) - optimized for 20 threads
+
 	log.Info("Configuring parallel processing for full hardware utilization",
 		"cpuCores", cpuCores,
 		"maxConcurrency", parallelConfig.MaxTxConcurrency,
 		"maxGoroutines", parallelConfig.MaxGoroutines,
 		"reservedForAI", "25% CPU + 6GB GPU for TinyLlama")
-	
+
 	var err error
 	worker.parallelProcessor, err = core.NewParallelStateProcessor(chainConfig, eth.BlockChain(), engine, parallelConfig)
 	if err != nil {
 		log.Error("Failed to create parallel state processor", "err", err)
 		worker.parallelProcessor = nil
 	} else {
-		log.Info("Miner parallel processing initialized", 
+		log.Info("Miner parallel processing initialized",
 			"txBatchSize", parallelConfig.TxBatchSize,
 			"maxConcurrency", parallelConfig.MaxTxConcurrency,
 			"pipelining", parallelConfig.EnablePipelining)
@@ -688,21 +732,94 @@ func (w *worker) taskLoop() {
 // and flush relative data to the database.
 func (w *worker) resultLoop() {
 	defer w.wg.Done()
+	var (
+		pendingResults []*sealedResult
+		retryTimer     *time.Timer
+		retryTimerC    <-chan time.Time
+	)
+
+	updateQueueGauge := func() {
+		blockPersistenceQueueGauge.Update(int64(len(pendingResults)))
+	}
+
+	resetRetryTimer := func() {
+		if len(pendingResults) == 0 {
+			if retryTimer != nil {
+				if !retryTimer.Stop() {
+					select {
+					case <-retryTimer.C:
+					default:
+					}
+				}
+			}
+			retryTimerC = nil
+			return
+		}
+		delay := time.Until(pendingResults[0].nextAttempt)
+		if delay < 0 {
+			delay = 0
+		}
+		if retryTimer == nil {
+			retryTimer = time.NewTimer(delay)
+		} else {
+			if !retryTimer.Stop() {
+				select {
+				case <-retryTimer.C:
+				default:
+				}
+			}
+			retryTimer.Reset(delay)
+		}
+		retryTimerC = retryTimer.C
+	}
+
+	enqueueResult := func(res *sealedResult) {
+		pendingResults = append(pendingResults, res)
+		sort.Slice(pendingResults, func(i, j int) bool {
+			return pendingResults[i].nextAttempt.Before(pendingResults[j].nextAttempt)
+		})
+		updateQueueGauge()
+	}
+
+	handleResult := func(res *sealedResult) {
+		if err := w.persistSealedResult(res); err != nil {
+			if errors.Is(err, core.ErrInsertionInterrupted) {
+				res.attempts++
+				backoff := blockPersistenceBackoff(res.attempts)
+				blockPersistenceRetryMeter.Mark(1)
+				log.Warn("Block persistence interrupted, retrying", "number", res.block.Number(), "sealhash", res.sealhash, "hash", res.block.Hash(), "attempt", res.attempts, "backoff", backoff)
+				res.nextAttempt = time.Now().Add(backoff)
+				enqueueResult(res)
+				return
+			}
+			log.Error("Failed writing block and state", "number", res.block.Number(), "sealhash", res.sealhash, "hash", res.block.Hash(), "err", err)
+			return
+		}
+
+		fields := []interface{}{
+			"number", res.block.Number(),
+			"sealhash", res.sealhash,
+			"hash", res.block.Hash(),
+			"elapsed", common.PrettyDuration(time.Since(res.createdAt)),
+		}
+		if res.attempts > 0 {
+			fields = append(fields, "retries", res.attempts)
+		}
+		log.Info("Successfully sealed new block", fields...)
+	}
+
 	for {
 		select {
 		case block := <-w.resultCh:
-			// Short circuit when receiving empty result.
 			if block == nil {
 				continue
 			}
-			// Short circuit when receiving duplicate result caused by resubmitting.
-			if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
+			hash := block.Hash()
+			if w.chain.HasBlock(hash, block.NumberU64()) {
 				continue
 			}
-			var (
-				sealhash = w.engine.SealHash(block.Header())
-				hash     = block.Hash()
-			)
+			sealhash := w.engine.SealHash(block.Header())
+
 			w.pendingMu.RLock()
 			task, exist := w.pendingTasks[sealhash]
 			w.pendingMu.RUnlock()
@@ -710,23 +827,22 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
-			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
-			var (
-				receipts = make([]*types.Receipt, len(task.receipts))
-				logs     []*types.Log
-			)
+
+			w.pendingMu.Lock()
+			delete(w.pendingTasks, sealhash)
+			w.pendingMu.Unlock()
+
+			receipts := make([]*types.Receipt, len(task.receipts))
+			var logs []*types.Log
 			for i, taskReceipt := range task.receipts {
 				receipt := new(types.Receipt)
 				receipts[i] = receipt
 				*receipt = *taskReceipt
 
-				// add block location fields
 				receipt.BlockHash = hash
 				receipt.BlockNumber = block.Number()
 				receipt.TransactionIndex = uint(i)
 
-				// Update the block hash in all logs since it is now available and not when the
-				// receipt/log of individual transactions were created.
 				receipt.Logs = make([]*types.Log, len(taskReceipt.Logs))
 				for i, taskLog := range taskReceipt.Logs {
 					log := new(types.Log)
@@ -736,24 +852,50 @@ func (w *worker) resultLoop() {
 				}
 				logs = append(logs, receipt.Logs...)
 			}
-			// Insert mined block using pre-executed state to avoid re-execution under chainmu
-			if _, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true); err != nil {
-				log.Error("Failed writing block and state", "err", err)
-				continue
+
+			result := &sealedResult{
+				block:     block,
+				receipts:  receipts,
+				logs:      logs,
+				state:     task.state,
+				createdAt: task.createdAt,
+				sealhash:  sealhash,
 			}
-			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
-				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
-			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block})
+			handleResult(result)
+			resetRetryTimer()
 
-			// Insert the block into the set of pending ones to resultLoop for confirmations
-			w.unconfirmed.Insert(block.NumberU64(), block.Hash())
+		case <-retryTimerC:
+			now := time.Now()
+			for len(pendingResults) > 0 {
+				if pendingResults[0].nextAttempt.After(now) {
+					break
+				}
+				res := pendingResults[0]
+				pendingResults = pendingResults[1:]
+				updateQueueGauge()
+				handleResult(res)
+				now = time.Now()
+			}
+			resetRetryTimer()
 
 		case <-w.exitCh:
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
 			return
 		}
 	}
+}
+
+func (w *worker) persistSealedResult(res *sealedResult) error {
+	if _, err := w.chain.WriteBlockWithState(res.block, res.receipts, res.logs, res.state, true); err != nil {
+		return err
+	}
+
+	w.mux.Post(core.NewMinedBlockEvent{Block: res.block})
+	w.unconfirmed.Insert(res.block.NumberU64(), res.block.Hash())
+	return nil
 }
 
 // makeCurrent creates a new environment for the current cycle.
@@ -885,7 +1027,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 		optimalBatchSize := w.calculateOptimalBatchSize()
 		totalGPUProcessed := 0
 		batchNumber := 1
-		
+
 		// Continue GPU processing until we run out of transactions or reach gas limit
 		for {
 			// Check if we have enough gas and transactions for another GPU batch
@@ -893,17 +1035,17 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				log.Debug("Insufficient gas for more GPU batches", "remaining", w.current.gasPool.Gas())
 				break
 			}
-			
+
 			// Collect transactions into a batch for GPU processing
 			var txBatch []*types.Transaction
-			
+
 			// Collect up to optimal batch size transactions for GPU processing
 			for len(txBatch) < optimalBatchSize {
 				tx := txs.Peek()
 				if tx == nil {
 					break
 				}
-				
+
 				// Basic validation before adding to batch
 				from, _ := types.Sender(w.current.signer, tx)
 				if tx.Protected() && !w.chainConfig.IsEIP155(w.current.header.Number) {
@@ -916,28 +1058,28 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 						continue
 					}
 				}
-				
+
 				txBatch = append(txBatch, tx)
 				txs.Shift()
 			}
-			
+
 			// Break if we don't have enough transactions for a meaningful GPU batch
 			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
 				log.Debug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
 				break
 			}
-			
+
 			// Process batch with GPU
 			batchStart := time.Now()
 			log.Info("Processing GPU batch", "batchNumber", batchNumber, "batchSize", len(txBatch), "totalProcessed", totalGPUProcessed)
-			
+
 			// Use hybrid processor for GPU-accelerated prevalidation
 			err := w.hybridProcessor.ProcessTransactionsBatch(txBatch, func(results []*hybrid.TransactionResult, err error) {
 				if err != nil {
 					log.Warn("GPU batch processing failed, falling back to sequential", "batchNumber", batchNumber, "error", err)
 					return
 				}
-				
+
 				// Apply GPU-validated transactions sequentially (EVM execution still needs to be sequential for state consistency)
 				for i, result := range results {
 					if result.Valid && i < len(txBatch) {
@@ -951,11 +1093,11 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 					}
 				}
 			})
-			
+
 			// Update batch performance metrics
 			batchDuration := time.Since(batchStart)
 			w.updateBatchPerformance(len(txBatch), batchDuration)
-			
+
 			if err != nil {
 				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "batchNumber", batchNumber, "error", err)
 				break
@@ -965,14 +1107,14 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				batchNumber++
 				log.Info("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
 			}
-			
+
 			// Check for interrupts between batches
 			if interrupt != nil && atomic.LoadInt32(interrupt) != commitInterruptNone {
 				log.Debug("GPU batch processing interrupted", "totalProcessed", totalGPUProcessed)
 				break
 			}
 		}
-		
+
 		if totalGPUProcessed > 0 {
 			log.Info("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
 		}
@@ -1186,14 +1328,14 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 
 	// Fill the block with all available pending transactions.
 	pending := w.eth.TxPool().Pending(true)
-	
+
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
 	// BUT ONLY if there are no pending transactions to avoid empty blocks when we have transactions
 	if !noempty && atomic.LoadUint32(&w.noempty) == 0 && len(pending) == 0 {
 		w.commit(uncles, nil, false, tstart)
 	}
-	
+
 	// Short circuit if there is no available pending transactions.
 	// But if we disable empty precommit already, ignore it. Since
 	// empty block is necessary to keep the liveness of the network.
@@ -1204,20 +1346,20 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 
 	// Estimate total transaction count for parallel processing decision
 	totalTxCount := w.estimateTransactionCount(pending)
-	
+
 	// Use parallel processor for massive transaction batches (100K+ transactions)
 	if w.parallelProcessor != nil && totalTxCount >= 100000 {
-		log.Info("Using parallel processor for massive transaction batch", 
-			"totalTxs", totalTxCount, 
+		log.Info("Using parallel processor for massive transaction batch",
+			"totalTxs", totalTxCount,
 			"threshold", 100000,
 			"parallelBatchSize", 100000)
-		
+
 		// Combine all transactions for parallel processing
 		allTxs := make([]*types.Transaction, 0, totalTxCount)
 		for _, txList := range pending {
 			allTxs = append(allTxs, txList...)
 		}
-		
+
 		if len(allTxs) > 0 {
 			// Create a temporary block for parallel processing
 			tempBlock := types.NewBlock(
@@ -1227,44 +1369,44 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 				nil, // no receipts yet
 				trie.NewStackTrie(nil),
 			)
-			
+
 			batchStart := time.Now()
-			
+
 			// Process ALL transactions with parallel processor
 			receipts, logs, gasUsed, err := w.parallelProcessor.ProcessParallel(
-				tempBlock, 
-				w.current.state, 
+				tempBlock,
+				w.current.state,
 				*w.chain.GetVMConfig(),
 			)
-			
+
 			batchDuration := time.Since(batchStart)
-			
+
 			if err != nil {
-				log.Warn("Massive parallel processing failed, falling back to standard processing", 
-					"error", err, 
+				log.Warn("Massive parallel processing failed, falling back to standard processing",
+					"error", err,
 					"txCount", len(allTxs))
 				// Fall through to standard processing
 			} else {
 				// Parallel processing succeeded for massive batch
-				log.Info("MASSIVE parallel processing completed successfully", 
+				log.Info("MASSIVE parallel processing completed successfully",
 					"txCount", len(allTxs),
 					"gasUsed", gasUsed,
 					"duration", batchDuration,
 					"tps", float64(len(allTxs))/batchDuration.Seconds(),
 					"logCount", len(logs))
-				
+
 				// Update current state with results
 				w.current.txs = append(w.current.txs, allTxs...)
 				w.current.receipts = append(w.current.receipts, receipts...)
 				w.current.tcount += len(allTxs)
 				w.current.header.GasUsed += gasUsed
-				
+
 				// Ensure gasPool is initialized before using it
 				if w.current.gasPool == nil {
 					w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
 				}
 				w.current.gasPool.SubGas(gasUsed)
-				
+
 				// Skip standard processing since parallel processing handled everything
 				// But we still need to commit the block with the processed transactions
 				w.commit(uncles, w.fullTaskHook, true, tstart)
@@ -1272,7 +1414,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			}
 		}
 	}
-	
+
 	// Standard processing for smaller batches or if parallel processing failed
 	// Split the pending transactions into locals and remotes
 	localTxs, remoteTxs := make(map[common.Address]types.Transactions), pending
@@ -1282,7 +1424,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			localTxs[account] = txs
 		}
 	}
- 	if len(localTxs) > 0 {
+	if len(localTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(w.current.signer, localTxs, header.BaseFee)
 		if w.commitTransactions(txs, w.coinbase, interrupt) {
 			w.current.state.StopPrefetcher()
@@ -1357,13 +1499,13 @@ func (w *worker) calculateOptimalBatchSize() int {
 	if !w.adaptiveBatching || w.hybridProcessor == nil {
 		return w.batchThreshold
 	}
-	
+
 	// Get current hybrid processor stats
 	stats := w.hybridProcessor.GetStats()
-	
+
 	// Base batch size
 	baseBatchSize := w.batchThreshold
-	
+
 	// Use AI recommendations if available
 	if w.aiOptimization && w.aiLoadBalancer != nil {
 		aiStats := w.aiLoadBalancer.GetStats()
@@ -1383,7 +1525,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 			log.Debug("Using AI-recommended strategy", "strategy", aiStats.LastPrediction.RecommendedStrategy, "confidence", aiStats.LastPrediction.Confidence)
 		}
 	}
-	
+
 	// Adjust based on GPU utilization
 	if stats.GPUUtilization < 0.5 {
 		// GPU underutilized, increase batch size
@@ -1392,7 +1534,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 		// GPU overloaded, decrease batch size
 		baseBatchSize = int(float64(baseBatchSize) * 0.8)
 	}
-	
+
 	// Adjust based on current TPS vs target
 	targetTPS := uint64(500000) // Target 500K TPS for 200K+ sustained performance
 	if stats.CurrentTPS < targetTPS/2 {
@@ -1402,7 +1544,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 		// High TPS, maintain current batch size
 		// No adjustment needed
 	}
-	
+
 	// Adjust based on previous batch performance
 	if w.lastBatchTime > 0 && w.lastBatchSize > 0 {
 		// If last batch was slow, reduce size
@@ -1413,17 +1555,17 @@ func (w *worker) calculateOptimalBatchSize() int {
 			baseBatchSize = int(float64(w.lastBatchSize) * 1.1)
 		}
 	}
-	
+
 	// Enforce bounds - increased for 200K+ TPS support
 	minBatchSize := 2500  // 5x increase from 500
 	maxBatchSize := 50000 // 5x increase from 10K
-	
+
 	if baseBatchSize < minBatchSize {
 		baseBatchSize = minBatchSize
 	} else if baseBatchSize > maxBatchSize {
 		baseBatchSize = maxBatchSize
 	}
-	
+
 	return baseBatchSize
 }
 
@@ -1431,16 +1573,16 @@ func (w *worker) calculateOptimalBatchSize() int {
 func (w *worker) updateBatchPerformance(batchSize int, duration time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	
+
 	w.lastBatchSize = batchSize
 	w.lastBatchTime = duration
-	
+
 	// Log performance for monitoring
 	if duration > 0 {
 		tps := float64(batchSize) / duration.Seconds()
-		log.Debug("GPU batch performance", 
-			"batchSize", batchSize, 
-			"duration", duration, 
+		log.Debug("GPU batch performance",
+			"batchSize", batchSize,
+			"duration", duration,
 			"tps", tps,
 		)
 	}
@@ -1450,15 +1592,15 @@ func (w *worker) updateBatchPerformance(batchSize int, duration time.Duration) {
 func (w *worker) GetMinerStats() map[string]interface{} {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	
+
 	stats := map[string]interface{}{
-		"gpu_enabled":      w.gpuEnabled,
-		"batch_threshold":  w.batchThreshold,
-		"last_batch_size":  w.lastBatchSize,
-		"last_batch_time":  w.lastBatchTime,
+		"gpu_enabled":       w.gpuEnabled,
+		"batch_threshold":   w.batchThreshold,
+		"last_batch_size":   w.lastBatchSize,
+		"last_batch_time":   w.lastBatchTime,
 		"adaptive_batching": w.adaptiveBatching,
 	}
-	
+
 	if w.hybridProcessor != nil {
 		hybridStats := w.hybridProcessor.GetStats()
 		stats["hybrid_stats"] = map[string]interface{}{
@@ -1471,11 +1613,11 @@ func (w *worker) GetMinerStats() map[string]interface{} {
 			"load_balancing_ratio": hybridStats.LoadBalancingRatio,
 		}
 	}
-	
+
 	return stats
 }
 
-// collectAllTransactions converts TransactionsByPriceAndNonce to a slice 
+// collectAllTransactions converts TransactionsByPriceAndNonce to a slice
 // Note: This consumes the iterator, so should only be called when we're going to use parallel processing
 func (w *worker) collectAllTransactions(txs *types.TransactionsByPriceAndNonce) []*types.Transaction {
 	var allTxs []*types.Transaction
