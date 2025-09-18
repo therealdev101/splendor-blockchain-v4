@@ -34,9 +34,14 @@ __device__ uint64_t rotl64(uint64_t x, int n) {
 __device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit,
                                        uint32_t* to_off, uint32_t* to_len,
                                        uint32_t* data_off, uint32_t* data_len,
-                                       uint8_t* v_out);
+                                       uint32_t* v_off, uint32_t* v_len,
+                                       uint32_t* r_off, uint32_t* r_len,
+                                       uint32_t* s_off, uint32_t* s_len);
 __device__ void compute_transaction_hash(uint8_t* data, uint32_t length, uint8_t* hash32_out);
-__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length);
+__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length,
+                                              uint32_t v_off, uint32_t v_len,
+                                              uint32_t r_off, uint32_t r_len,
+                                              uint32_t s_off, uint32_t s_len);
 __device__ uint8_t execute_evm_transaction(uint8_t* tx_data, uint32_t length, uint8_t* state_data, uint8_t* access_list, uint64_t* gas_used, uint8_t* return_hash32, uint8_t* revert_hash32,
                                            uint32_t data_off, uint32_t data_len, uint32_t to_off, uint32_t to_len, uint64_t gas_limit);
 __device__ void keccak_f1600(uint64_t s[25]);
@@ -140,15 +145,17 @@ __global__ void process_transactions_kernel(
     
     if (length > 0 && length < 1024) {
         // Step 1: Decode RLP transaction structure
-        uint32_t to_off=0, to_len=0, data_off=0, data_len=0; uint8_t v_val=0;
-        valid = decode_rlp_transaction(tx, length, &gas_used, &to_off, &to_len, &data_off, &data_len, &v_val);
+        uint32_t to_off=0, to_len=0, data_off=0, data_len=0;
+        uint32_t v_off=0,v_len=0,r_off=0,r_len=0,s_off=0,s_len=0;
+        valid = decode_rlp_transaction(tx, length, &gas_used, &to_off, &to_len, &data_off, &data_len,
+                                       &v_off, &v_len, &r_off, &r_len, &s_off, &s_len);
         
         if (valid) {
             // Step 2: Compute transaction hash using Keccak-256
             compute_transaction_hash(tx, length, tx_hash);
             
             // Step 3: Perform signature recovery
-            bool sig_valid = recover_transaction_signature(tx, length);
+            bool sig_valid = recover_transaction_signature(tx, length, v_off, v_len, r_off, r_len, s_off, s_len);
             
             if (sig_valid) {
                 // Step 4: Execute EVM state transition
@@ -221,13 +228,15 @@ __device__ bool rlp_next_item(const uint8_t* p, uint32_t end, uint32_t pos, uint
 __device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit,
                                        uint32_t* to_off, uint32_t* to_len,
                                        uint32_t* data_off, uint32_t* data_len,
-                                       uint8_t* v_out) {
+                                       uint32_t* v_off, uint32_t* v_len,
+                                       uint32_t* r_off, uint32_t* r_len,
+                                       uint32_t* s_off, uint32_t* s_len) {
     if (length < 3) return false;
     if (tx_data[0] < 0xc0) return false; // expect list
     uint32_t list_len=0, hdr=0;
     if (!rlp_read_len(tx_data, length, 0, true, &list_len, &hdr)) return false;
     uint32_t pos = hdr; uint32_t end = hdr + list_len; if (end > length) return false;
-    uint32_t off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_out=0;
+    uint32_t off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *v_off=*v_len=*r_off=*r_len=*s_off=*s_len=0; *gas_limit=0;
     for (int idx=0; idx<9; idx++) {
         if (!rlp_next_item(tx_data, end, pos, &off, &len, &pos)) return false;
         if (idx == 2) {
@@ -235,7 +244,9 @@ __device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64
             *gas_limit = gl;
         } else if (idx == 3) { *to_off = off; *to_len = len; }
         else if (idx == 5) { *data_off = off; *data_len = len; }
-        else if (idx == 6) { if (len==1) *v_out = tx_data[off]; }
+        else if (idx == 6) { *v_off = off; *v_len = len; }
+        else if (idx == 7) { *r_off = off; *r_len = len; }
+        else if (idx == 8) { *s_off = off; *s_len = len; }
     }
     return (*gas_limit > 0);
 }
@@ -245,26 +256,31 @@ __device__ void compute_transaction_hash(uint8_t* tx_data, uint32_t length, uint
     keccak256(tx_data, length, hash_out32);
 }
 
-// Device function for signature validation (structural + low-s)
-__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length) {
-    if (length < 65) return false;
-    
-    // Extract signature components (r, s, v) from end of transaction
-    uint8_t* sig_r = &tx_data[length - 65];
-    uint8_t* sig_s = &tx_data[length - 33];
-    uint8_t v = tx_data[length - 1];
-    
+// Device function for signature validation (structural + low-s) using RLP-decoded offsets
+__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length,
+                                              uint32_t v_off, uint32_t v_len,
+                                              uint32_t r_off, uint32_t r_len,
+                                              uint32_t s_off, uint32_t s_len) {
+    if (v_off + v_len > length || r_off + r_len > length || s_off + s_len > length) return false;
+    if (r_len == 0 || r_len > 32 || s_len == 0 || s_len > 32 || v_len == 0 || v_len > 32) return false;
+    // Reject leading zero bytes (non-canonical RLP scalars)
+    if (tx_data[r_off] == 0 || tx_data[s_off] == 0) return false;
+    // Parse v (big-endian, clamp to 64 bits for checks)
+    uint64_t v = 0; for (uint32_t i=0;i<v_len && i<8;i++){ v = (v<<8) | tx_data[v_off+i]; }
     bool valid_v = (v == 27 || v == 28 || v >= 35);
-    bool r_nonzero = false, s_nonzero = false;
-    for (int i = 0; i < 32; i++) { if (sig_r[i] != 0) r_nonzero = true; if (sig_s[i] != 0) s_nonzero = true; }
-    if (!(valid_v && r_nonzero && s_nonzero)) return false;
-    const uint8_t secp256k1n_half[32] = {
-        0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-        0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
-        0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0
-    };
-    for (int i=0;i<32;i++) { if (sig_s[i] < secp256k1n_half[i]) break; if (sig_s[i] > secp256k1n_half[i]) return false; }
+    if (!valid_v) return false;
+    // Load r,s into fixed-width 32-byte arrays
+    uint8_t r32[32]; uint8_t s32[32]; for (int i=0;i<32;i++){ r32[i]=0; s32[i]=0; }
+    for (uint32_t i=0;i<r_len;i++) r32[32 - r_len + i] = tx_data[r_off + i];
+    for (uint32_t i=0;i<s_len;i++) s32[32 - s_len + i] = tx_data[s_off + i];
+    bool r_nonzero=false, s_nonzero=false; for (int i=0;i<32;i++){ if (r32[i]) r_nonzero=true; if (s32[i]) s_nonzero=true; }
+    if (!(r_nonzero && s_nonzero)) return false;
+    // Low-s check against secp256k1n/2
+    const uint8_t n_half[32] = { 0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                                 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                                 0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
+                                 0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0 };
+    for (int i=0;i<32;i++){ if (s32[i] < n_half[i]) break; if (s32[i] > n_half[i]) return false; }
     return true;
 }
 

@@ -35,14 +35,14 @@ static bool opencl_initialized = false;
 // OpenCL kernel source code
 const char* keccak_kernel_source = R"(
 __constant ulong keccak_round_constants[24] = {
-    0x0000000000000001UL, 0x0000000000008082UL, 0x800000000000808aUL,
-    0x8000000080008000UL, 0x000000000000808bUL, 0x0000000080000001UL,
-    0x8000000080008081UL, 0x8000000000008009UL, 0x000000000000008aUL,
-    0x0000000000000088UL, 0x0000000080008009UL, 0x8000000000008003UL,
-    0x8000000000008002UL, 0x8000000000000080UL, 0x000000000000800aUL,
-    0x800000008000000aUL, 0x8000000080008081UL, 0x8000000000008080UL,
-    0x0000000080000001UL, 0x8000000080008008UL, 0x8000000000000000UL,
-    0x0000000080008082UL, 0x800000000000808aUL, 0x8000000080008000UL
+    0x0000000000000001UL, 0x0000000000008082UL, 0x800000000000808AUL,
+    0x8000000080008000UL, 0x000000000000808BUL, 0x0000000080000001UL,
+    0x8000000080008081UL, 0x8000000000008009UL, 0x000000000000008AUL,
+    0x0000000000000088UL, 0x0000000080008009UL, 0x000000008000000AUL,
+    0x000000008000808BUL, 0x800000000000008BUL, 0x8000000000008089UL,
+    0x8000000000008003UL, 0x8000000000008002UL, 0x8000000000000080UL,
+    0x000000000000800AUL, 0x800000008000000AUL, 0x8000000080008081UL,
+    0x8000000000008080UL, 0x0000000080000001UL, 0x8000000080008008UL
 };
 
 ulong rotl64(ulong x, int n) {
@@ -174,15 +174,16 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     
     if (tx_len > 0 && tx_len < 1024) {
         // Step 1: Decode RLP transaction structure
-        int to_off=0,to_len=0,data_off=0,data_len=0; uchar v_val=0; ulong gas_limit=0;
-        valid = decode_rlp_transaction_ocl(tx, tx_len, &gas_limit, &to_off, &to_len, &data_off, &data_len, &v_val);
+        int to_off=0,to_len=0,data_off=0,data_len=0; int v_off=0,v_len=0,r_off=0,r_len=0,s_off=0,s_len=0; ulong gas_limit=0;
+        valid = decode_rlp_transaction_ocl(tx, tx_len, &gas_limit, &to_off, &to_len, &data_off, &data_len,
+                                           &v_off, &v_len, &r_off, &r_len, &s_off, &s_len);
         
         if (valid) {
             // Step 2: Compute transaction hash using Keccak-256
             compute_transaction_hash_ocl(tx, tx_len, tx_hash);
             
             // Step 3: Perform signature recovery
-            uchar sig_valid = recover_transaction_signature_ocl(tx, tx_len, state);
+            uchar sig_valid = recover_transaction_signature_ocl(tx, tx_len, v_off, v_len, r_off, r_len, s_off, s_len);
             
             if (sig_valid) {
                 // Step 4: Execute EVM state transition
@@ -244,18 +245,21 @@ uchar rlp_next_item_ocl(__global const uchar* p, int end, int pos, int* item_off
 
 // Helper function to decode RLP transaction structure
 uchar decode_rlp_transaction_ocl(__global uchar* tx_data, int length, ulong* gas_limit,
-                                 int* to_off, int* to_len, int* data_off, int* data_len, uchar* v_out) {
+                                 int* to_off, int* to_len, int* data_off, int* data_len,
+                                 int* v_off, int* v_len, int* r_off, int* r_len, int* s_off, int* s_len) {
     if (length < 3) return 0;
     if (tx_data[0] < 0xc0) return 0;
     int list_len=0, hdr=0; if (!rlp_read_len_ocl(tx_data, length, 0, 1, &list_len, &hdr)) return 0;
     int pos = hdr; int end = hdr + list_len; if (end > length) return 0;
-    int off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_out=0;
+    int off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_off=*v_len=*r_off=*r_len=*s_off=*s_len=0;
     for (int idx=0; idx<9; idx++) {
         if (!rlp_next_item_ocl(tx_data, end, pos, &off, &len, &pos)) return 0;
         if (idx == 2) { ulong gl=0; for (int i=0;i<len;i++){ gl = (gl<<8) | (ulong)tx_data[off+i]; } *gas_limit = gl; }
         else if (idx == 3) { *to_off = off; *to_len = len; }
         else if (idx == 5) { *data_off = off; *data_len = len; }
-        else if (idx == 6) { if (len==1) *v_out = tx_data[off]; }
+        else if (idx == 6) { *v_off = off; *v_len = len; }
+        else if (idx == 7) { *r_off = off; *r_len = len; }
+        else if (idx == 8) { *s_off = off; *s_len = len; }
     }
     return (*gas_limit > 0);
 }
@@ -266,25 +270,24 @@ void compute_transaction_hash_ocl(__global uchar* tx_data, int length, __private
 }
 
 // Helper function for signature recovery
-uchar recover_transaction_signature_ocl(__global uchar* tx_data, int length, __global uchar* state_data) {
-    if (length < 65) return 0;
-    
-    // Extract signature components (r, s, v) from end of transaction
-    __global uchar* sig_r = &tx_data[length - 65];
-    __global uchar* sig_s = &tx_data[length - 33];
-    uchar v = tx_data[length - 1];
-    
+uchar recover_transaction_signature_ocl(__global uchar* tx_data, int length,
+                                        int v_off, int v_len, int r_off, int r_len, int s_off, int s_len) {
+    if (v_off + v_len > length || r_off + r_len > length || s_off + s_len > length) return 0;
+    if (r_len <= 0 || r_len > 32 || s_len <= 0 || s_len > 32 || v_len <= 0 || v_len > 32) return 0;
+    if (tx_data[r_off] == 0 || tx_data[s_off] == 0) return 0;
+    ulong v=0; for (int i=0;i<v_len && i<8;i++){ v = (v<<8) | (ulong)tx_data[v_off+i]; }
     uchar valid_v = (v == 27 || v == 28 || v >= 35);
-    uchar r_nonzero = 0, s_nonzero = 0;
-    for (int i = 0; i < 32; i++) { if (sig_r[i] != 0) r_nonzero = 1; if (sig_s[i] != 0) s_nonzero = 1; }
-    if (!(valid_v && r_nonzero && s_nonzero)) return 0;
-    const uchar n_half[32] = {
-        0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-        0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
-        0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0
-    };
-    for (int i=0;i<32;i++){ if (sig_s[i] < n_half[i]) break; if (sig_s[i] > n_half[i]) return 0; }
+    if (!valid_v) return 0;
+    uchar r32[32]; uchar s32[32]; for (int i=0;i<32;i++){ r32[i]=0; s32[i]=0; }
+    for (int i=0;i<r_len;i++) r32[32 - r_len + i] = tx_data[r_off + i];
+    for (int i=0;i<s_len;i++) s32[32 - s_len + i] = tx_data[s_off + i];
+    uchar r_nonzero=0, s_nonzero=0; for (int i=0;i<32;i++){ if (r32[i]) r_nonzero=1; if (s32[i]) s_nonzero=1; }
+    if (!(r_nonzero && s_nonzero)) return 0;
+    const uchar n_half[32] = { 0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                               0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                               0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
+                               0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0 };
+    for (int i=0;i<32;i++){ if (s32[i] < n_half[i]) break; if (s32[i] > n_half[i]) return 0; }
     return 1;
 }
 
