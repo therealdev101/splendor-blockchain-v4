@@ -736,10 +736,9 @@ func (w *worker) resultLoop() {
 				}
 				logs = append(logs, receipt.Logs...)
 			}
-			// Commit block and state to database.
-			_, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true)
-			if err != nil {
-				log.Error("Failed writing block to chain", "err", err)
+			// Insert mined block using pre-executed state to avoid re-execution under chainmu
+			if _, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true); err != nil {
+				log.Error("Failed writing block and state", "err", err)
 				continue
 			}
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,

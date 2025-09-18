@@ -1187,10 +1187,19 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 
 // WriteBlockWithState writes the block and all associated state to the database.
 func (bc *BlockChain) WriteBlockWithState(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
+	lockWaitStart := time.Now()
 	if !bc.chainmu.TryLock() {
 		return NonStatTy, errInsertionInterrupted
 	}
-	defer bc.chainmu.Unlock()
+	lockAcquired := time.Now()
+	if wait := lockAcquired.Sub(lockWaitStart); wait > 0 {
+		log.Debug("chainmu acquired", "op", "WriteBlockWithState", "wait", wait)
+	}
+	defer func(acq time.Time) {
+		held := time.Since(acq)
+		log.Debug("chainmu held", "op", "WriteBlockWithState", "held", held)
+		bc.chainmu.Unlock()
+	}(lockAcquired)
 	return bc.writeBlockWithState(block, receipts, logs, state, emitHeadEvent)
 }
 
@@ -1216,6 +1225,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	// Note all the components of block(td, hash->number map, header, body, receipts)
 	// should be written atomically. BlockBatch is used for containing all components.
 	var waitBlockBatchWrite sync.WaitGroup
+	batchStart := time.Now()
 	waitBlockBatchWrite.Add(1)
 	go func() {
 		blockBatch := bc.db.NewBatch()
@@ -1301,6 +1311,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 
 	waitBlockBatchWrite.Wait()
+	log.Info("metric", "method", "blockBatchWrite", "number", blockNumber, "hash", blockHash, "time", time.Since(batchStart))
 	// If the total difficulty is higher than our known, add it to the canonical chain
 	// Second clause in the if statement reduces the vulnerability to selfish mining.
 	// Please refer to http://www.cs.cornell.edu/~ie53/publications/btcProcFC.pdf
@@ -1399,10 +1410,19 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 	}
 
 	// Pre-check passed, start the full block imports.
+	lockWaitStart := time.Now()
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
 	}
-	defer bc.chainmu.Unlock()
+	lockAcquired := time.Now()
+	if wait := lockAcquired.Sub(lockWaitStart); wait > 0 {
+		log.Debug("chainmu acquired", "op", "InsertChain", "wait", wait)
+	}
+	defer func(acq time.Time) {
+		held := time.Since(acq)
+		log.Debug("chainmu held", "op", "InsertChain", "held", held)
+		bc.chainmu.Unlock()
+	}(lockAcquired)
 	return bc.insertChain(chain, true)
 }
 
@@ -1412,10 +1432,19 @@ func (bc *BlockChain) InsertChainWithoutSealVerification(block *types.Block) (in
 	bc.blockProcFeed.Send(true)
 	defer bc.blockProcFeed.Send(false)
 
+	lockWaitStart := time.Now()
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
 	}
-	defer bc.chainmu.Unlock()
+	lockAcquired := time.Now()
+	if wait := lockAcquired.Sub(lockWaitStart); wait > 0 {
+		log.Debug("chainmu acquired", "op", "InsertChainWithoutSealVerification", "wait", wait)
+	}
+	defer func(acq time.Time) {
+		held := time.Since(acq)
+		log.Debug("chainmu held", "op", "InsertChainWithoutSealVerification", "held", held)
+		bc.chainmu.Unlock()
+	}(lockAcquired)
 	return bc.insertChain(types.Blocks([]*types.Block{block}), false)
 }
 
@@ -2213,10 +2242,19 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header, checkFreq int) (i
 		return i, err
 	}
 
+	lockWaitStart := time.Now()
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
 	}
-	defer bc.chainmu.Unlock()
+	lockAcquired := time.Now()
+	if wait := lockAcquired.Sub(lockWaitStart); wait > 0 {
+		log.Debug("chainmu acquired", "op", "InsertHeaderChain", "wait", wait)
+	}
+	defer func(acq time.Time) {
+		held := time.Since(acq)
+		log.Debug("chainmu held", "op", "InsertHeaderChain", "held", held)
+		bc.chainmu.Unlock()
+	}(lockAcquired)
 	_, err := bc.hc.InsertHeaderChain(chain, start)
 	return 0, err
 }
