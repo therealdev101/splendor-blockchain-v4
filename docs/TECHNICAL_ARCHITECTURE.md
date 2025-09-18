@@ -53,12 +53,12 @@ The GPU system supports both CUDA and OpenCL with RTX 4000 SFF Ada optimization:
 
 ```go
 // DefaultGPUConfig returns optimized GPU configuration for NVIDIA RTX 4000 SFF Ada (20GB VRAM)
-// Balanced for blockchain processing + TinyLlama 1.1B AI model
+// Balanced for blockchain processing + TinyLlama 1.1B AI model with 2GB VRAM reservation
 func DefaultGPUConfig() *GPUConfig {
     return &GPUConfig{
-        PreferredGPUType: GPUTypeOpenCL, // Prefer OpenCL for RTX 4000 SFF Ada
-        MaxBatchSize:     800000,        // 4x increase - 800K batches (reserve GPU for AI)
-        MaxMemoryUsage:   14 * 1024 * 1024 * 1024, // 14GB GPU memory (6GB for TinyLlama + system)
+        PreferredGPUType: GPUTypeCUDA,   // Prefer CUDA for RTX 4000 SFF Ada when available
+        MaxBatchSize:     800000,        // 4x increase - 800K batches (keeps GPU saturated)
+        MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB GPU memory (leave 2GB for TinyLlama + system)
         HashWorkers:      80,            // 80 workers - balance with AI workload
         SignatureWorkers: 80,            // 80 signature verification workers
         TxWorkers:        80,            // 80 transaction processing workers
@@ -345,9 +345,9 @@ aiConfig := &ai.AIConfig{
 
 // GPU Configuration
 gpuConfig := &gpu.GPUConfig{
-    PreferredGPUType: gpu.GPUTypeOpenCL,
+    PreferredGPUType: gpu.GPUTypeCUDA,
     MaxBatchSize:     800000,
-    MaxMemoryUsage:   14 * 1024 * 1024 * 1024, // 14GB
+    MaxMemoryUsage:   18 * 1024 * 1024 * 1024, // 18GB (leave 2GB for TinyLlama)
     HashWorkers:      80,
     SignatureWorkers: 80,
     TxWorkers:        80,

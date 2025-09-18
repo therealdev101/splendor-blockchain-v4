@@ -89,7 +89,7 @@ User=root
 WorkingDirectory=/opt/vllm-env
 Environment=CUDA_VISIBLE_DEVICES=0
 Environment=VLLM_USE_MODELSCOPE=False
-ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.15 --max-model-len 2048 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
+ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --host 0.0.0.0 --port 8000 --gpu-memory-utilization 0.1 --max-model-len 2048 --dtype float16 --tensor-parallel-size 1 --enforce-eager --disable-log-stats
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -276,7 +276,7 @@ AI_CONFIDENCE_THRESHOLD=0.75
 AI_ENABLE_LEARNING=true
 AI_ENABLE_PREDICTIONS=true
 AI_FAST_MODE=true
-VLLM_GPU_MEMORY_UTILIZATION=0.4
+VLLM_GPU_MEMORY_UTILIZATION=0.1
 VLLM_MAX_MODEL_LEN=4096
 EOF
         echo -e "${GREEN}vLLM TinyLlama 1.1B AI configuration added to .env${NC}"

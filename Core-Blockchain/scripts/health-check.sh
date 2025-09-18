@@ -107,9 +107,9 @@ check_item "Chain ID 6546" "grep '\"chainId\": 6546' ./genesis.json"
 check_item ".env file exists" "test -f ./.env"
 check_item "GPU enabled in config" "grep 'ENABLE_GPU=true' ./.env"
 check_item "500B gas limit in env" "grep 'GAS_LIMIT=500000000000' ./.env"
-check_item "RTX 4000 batch size (80K)" "grep 'GPU_MAX_BATCH_SIZE=80000' ./.env"
-check_item "RTX 4000 memory (16GB)" "grep 'GPU_MAX_MEMORY_USAGE=17179869184' ./.env"
-check_item "8M TPS target" "grep 'THROUGHPUT_TARGET=8000000' ./.env"
+check_item "RTX 4000 batch size (800K)" "grep 'GPU_MAX_BATCH_SIZE=800000' ./.env"
+check_item "RTX 4000 memory (18GB blockchain allocation)" "grep 'GPU_MAX_MEMORY_USAGE=19327352832' ./.env"
+check_item "2M TPS target" "grep 'THROUGHPUT_TARGET=2000000' ./.env"
 
 echo -e "\n${PURPLE}=== 4. GPU ACCELERATION ===${NC}"
 
@@ -166,7 +166,7 @@ echo -e "\n${CYAN}Success Rate: $SUCCESS_RATE%${NC}"
 if [ "$FAILED" -eq 0 ] && [ "$SUCCESS_RATE" -ge 80 ]; then
     echo -e "\n${GREEN}🎉 SYSTEM READY FOR PRODUCTION DEPLOYMENT!${NC}"
     echo -e "${CYAN}Your AI-powered GPU blockchain is configured correctly.${NC}"
-    echo -e "${CYAN}Expected performance: 8M+ TPS with NVIDIA RTX 4000 SFF Ada${NC}"
+    echo -e "${CYAN}Expected performance: 2M TPS stretch target with NVIDIA RTX 4000 SFF Ada${NC}"
 elif [ "$FAILED" -eq 0 ]; then
     echo -e "\n${ORANGE}⚠️  SYSTEM MOSTLY READY - Address warnings for optimal performance${NC}"
 else

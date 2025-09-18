@@ -314,20 +314,20 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// Initialize parallel state processor for advanced parallel processing
 	parallelConfig := core.DefaultParallelProcessorConfig()
 	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
-	// CPU-first strategy to prevent GPU saturation at 400K+ TPS
-	cpuCores := runtime.NumCPU()                            // 20 threads
-	parallelConfig.TxBatchSize = 25000                      // Reduced batch size to prevent 500MB+ blocks that stall consensus
-	parallelConfig.MaxTxConcurrency = cpuCores * 50         // 1000 concurrent transactions (20 * 50)
-	parallelConfig.MaxMemoryUsage = 16 * 1024 * 1024 * 1024 // 16GB RAM for massive CPU processing
-	parallelConfig.MaxGoroutines = cpuCores * 100           // 2000 goroutines (20 * 100) for 400K+ TPS
-	parallelConfig.StateWorkers = cpuCores * 4              // 80 state workers (20 * 4) - right-sized for i5-13500
-	parallelConfig.MaxValidationWorkers = cpuCores * 5      // 100 validation workers (20 * 5) - optimized for 20 threads
+	// Align with GPU-first plan while reserving capacity for TinyLlama 1.1B
+	cpuCores := runtime.NumCPU()                           // 20 threads
+	parallelConfig.TxBatchSize = 100000                    // Match GPU-validated batches (100K transactions)
+	parallelConfig.MaxTxConcurrency = cpuCores * 12        // Use ~75% of CPU cores for blockchain execution
+	parallelConfig.MaxMemoryUsage = 6 * 1024 * 1024 * 1024 // 6GB RAM ceiling to protect AI workloads
+	parallelConfig.MaxGoroutines = cpuCores * 24           // Aggressive parallelism without starving AI threads
+	parallelConfig.StateWorkers = cpuCores * 2             // Dual state workers per core keeps pipeline saturated
+	parallelConfig.MaxValidationWorkers = cpuCores * 2     // Balanced validation workers aligned with state workers
 
 	log.Info("Configuring parallel processing for full hardware utilization",
 		"cpuCores", cpuCores,
 		"maxConcurrency", parallelConfig.MaxTxConcurrency,
 		"maxGoroutines", parallelConfig.MaxGoroutines,
-		"reservedForAI", "25% CPU + 6GB GPU for TinyLlama")
+		"reservedForAI", "25% CPU + 2GB GPU for TinyLlama")
 
 	var err error
 	worker.parallelProcessor, err = core.NewParallelStateProcessor(chainConfig, eth.BlockChain(), engine, parallelConfig)
@@ -1671,7 +1671,7 @@ func (w *worker) calculateOptimalBatchSize() int {
 	}
 
 	// Adjust based on current TPS vs target
-	targetTPS := uint64(500000) // Target 500K TPS for 200K+ sustained performance
+	targetTPS := uint64(2000000) // Target 2M TPS stretch goal for GPU-first execution
 	if stats.CurrentTPS < targetTPS/2 {
 		// Low TPS, try larger batches
 		baseBatchSize = int(float64(baseBatchSize) * 1.2)
