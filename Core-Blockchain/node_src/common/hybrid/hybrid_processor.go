@@ -922,6 +922,33 @@ func (h *HybridProcessor) adjustLoadBalancing() {
 	}
 }
 
+// ProcessTransactionsBatch processes a batch of transactions using the optimal strategy
+func (h *HybridProcessor) ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*TransactionResult, error)) error {
+	if len(txs) == 0 {
+		callback([]*TransactionResult{}, nil)
+		return nil
+	}
+
+	start := time.Now()
+	strategy, reason := h.determineProcessingStrategy(len(txs))
+
+	h.logDebug("Processing transaction batch", 
+		"size", len(txs), 
+		"strategy", strategy.String(), 
+		"reason", reason)
+
+	switch strategy {
+	case ProcessingStrategyCPUOnly:
+		return h.processCPUOnly(txs, callback, start)
+	case ProcessingStrategyGPUOnly:
+		return h.processGPUOnly(txs, callback, start)
+	case ProcessingStrategyHybrid:
+		return h.processHybrid(txs, callback, start)
+	default:
+		return h.processCPUOnly(txs, callback, start)
+	}
+}
+
 // GetStats returns current hybrid processor statistics
 func (h *HybridProcessor) GetStats() HybridStats {
 	h.mu.RLock()
