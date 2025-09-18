@@ -16,7 +16,7 @@ import (
 )
 
 /*
-#cgo LDFLAGS: ./common/gpu/libcuda_kernels.so ./common/gpu/libopencl_kernels.so -lOpenCL -L/usr/local/cuda/lib64 -lcudart -Wl,-rpath,./common/gpu -Wl,-rpath,/usr/local/cuda/lib64
+#cgo LDFLAGS: ${SRCDIR}/libcuda_kernels.so ${SRCDIR}/libopencl_kernels.so -lOpenCL -L/usr/local/cuda/lib64 -lcudart -Wl,-rpath,${SRCDIR} -Wl,-rpath,/usr/local/cuda/lib64
 
 #include <stdlib.h>
 #include <string.h>
