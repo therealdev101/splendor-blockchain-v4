@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	maxRequestContentLength = 1024 * 1024 * 5
+	maxRequestContentLength = 1024 * 1024 * 1024 // Increased to 1GB for large block support
 	contentType             = "application/json"
 )
 
