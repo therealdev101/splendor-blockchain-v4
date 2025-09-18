@@ -22,11 +22,8 @@ __constant__ uint64_t keccak_round_constants[KECCAK_ROUNDS] = {
     0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
 };
 
-// Rotation offsets for Keccak-256
-__constant__ int keccak_rotation_offsets[24] = {
-    1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62,
-    18, 39, 61, 20, 44
-};
+// Rotation offsets placeholder (not used by full keccak below)
+__constant__ int keccak_rotation_offsets[24] = { 0 };
 
 // CUDA device function for left rotation
 __device__ uint64_t rotl64(uint64_t x, int n) {
@@ -34,12 +31,16 @@ __device__ uint64_t rotl64(uint64_t x, int n) {
 }
 
 // Forward declarations for device functions
-__device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit);
-__device__ void compute_transaction_hash(uint8_t* tx_data, uint32_t length, uint32_t* hash_out);
-__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length, uint8_t* state_data);
-__device__ uint8_t execute_evm_transaction(uint8_t* tx_data, uint32_t length, uint8_t* state_data, uint8_t* access_list, uint64_t* gas_used, uint32_t* return_hash, uint32_t* revert_hash);
-__device__ void keccak_f1600_simplified(uint64_t state[25]);
-__device__ void compute_simple_hash(uint8_t* data, uint32_t length, uint32_t* hash_out);
+__device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit,
+                                       uint32_t* to_off, uint32_t* to_len,
+                                       uint32_t* data_off, uint32_t* data_len,
+                                       uint8_t* v_out);
+__device__ void compute_transaction_hash(uint8_t* data, uint32_t length, uint8_t* hash32_out);
+__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length);
+__device__ uint8_t execute_evm_transaction(uint8_t* tx_data, uint32_t length, uint8_t* state_data, uint8_t* access_list, uint64_t* gas_used, uint8_t* return_hash32, uint8_t* revert_hash32,
+                                           uint32_t data_off, uint32_t data_len, uint32_t to_off, uint32_t to_len, uint64_t gas_limit);
+__device__ void keccak_f1600(uint64_t s[25]);
+__device__ void keccak256(const uint8_t* in, uint32_t inlen, uint8_t out32[32]);
 
 // CUDA kernel for Keccak-256 hashing
 __global__ void keccak256_batch_kernel(
@@ -51,28 +52,11 @@ __global__ void keccak256_batch_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= batch_size) return;
     
-    // Initialize Keccak state
-    uint64_t state[KECCAK_STATE_SIZE] = {0};
-    
     // Get input for this thread
     uint8_t* input = &input_data[idx * 256]; // Max 256 bytes per input
     uint32_t length = input_lengths[idx];
     uint8_t* output = &output_hashes[idx * KECCAK_HASH_SIZE];
-    
-    // Simplified Keccak-256 implementation
-    // In production, this would be a full Keccak-256 implementation
-    // For now, we'll do a simplified hash based on input data
-    
-    uint64_t hash = 0;
-    for (uint32_t i = 0; i < length && i < 256; i++) {
-        hash ^= ((uint64_t)input[i]) << (i % 64);
-        hash = rotl64(hash, 1);
-    }
-    
-    // Store result (simplified - real Keccak would produce 32 bytes)
-    for (int i = 0; i < KECCAK_HASH_SIZE; i++) {
-        output[i] = (uint8_t)(hash >> (i * 8));
-    }
+    keccak256(input, length, output);
 }
 
 // CUDA kernel for ECDSA signature verification
@@ -150,26 +134,28 @@ __global__ void process_transactions_kernel(
     bool valid = false;
     uint8_t exec_status = 3; // invalid by default
     uint64_t gas_used = 0;
-    uint32_t tx_hash[8] = {0}; // 256-bit hash
-    uint32_t return_hash[8] = {0};
-    uint32_t revert_hash[8] = {0};
+    uint8_t tx_hash[32] = {0};
+    uint8_t return_hash[32] = {0};
+    uint8_t revert_hash[32] = {0};
     
     if (length > 0 && length < 1024) {
         // Step 1: Decode RLP transaction structure
-        valid = decode_rlp_transaction(tx, length, &gas_used);
+        uint32_t to_off=0, to_len=0, data_off=0, data_len=0; uint8_t v_val=0;
+        valid = decode_rlp_transaction(tx, length, &gas_used, &to_off, &to_len, &data_off, &data_len, &v_val);
         
         if (valid) {
             // Step 2: Compute transaction hash using Keccak-256
             compute_transaction_hash(tx, length, tx_hash);
             
             // Step 3: Perform signature recovery
-            bool sig_valid = recover_transaction_signature(tx, length, state);
+            bool sig_valid = recover_transaction_signature(tx, length);
             
             if (sig_valid) {
                 // Step 4: Execute EVM state transition
                 exec_status = execute_evm_transaction(
-                    tx, length, state, access_list, 
-                    &gas_used, return_hash, revert_hash
+                    tx, length, state, access_list,
+                    &gas_used, return_hash, revert_hash,
+                    data_off, data_len, to_off, to_len, gas_used
                 );
             } else {
                 exec_status = 3; // invalid signature
@@ -180,12 +166,7 @@ __global__ void process_transactions_kernel(
     
     // Store results in packed format
     // Transaction hash (32 bytes)
-    for (int i = 0; i < 8; i++) {
-        result[i*4] = (tx_hash[i] >> 0) & 0xFF;
-        result[i*4+1] = (tx_hash[i] >> 8) & 0xFF;
-        result[i*4+2] = (tx_hash[i] >> 16) & 0xFF;
-        result[i*4+3] = (tx_hash[i] >> 24) & 0xFF;
-    }
+    for (int i = 0; i < 32; i++) result[i] = tx_hash[i];
     
     result[32] = valid ? 1 : 0;           // Validity flag
     result[33] = exec_status;             // Execution status
@@ -196,86 +177,76 @@ __global__ void process_transactions_kernel(
     }
     
     // Return data hash (32 bytes)
-    for (int i = 0; i < 8; i++) {
-        result[42 + i*4] = (return_hash[i] >> 0) & 0xFF;
-        result[42 + i*4+1] = (return_hash[i] >> 8) & 0xFF;
-        result[42 + i*4+2] = (return_hash[i] >> 16) & 0xFF;
-        result[42 + i*4+3] = (return_hash[i] >> 24) & 0xFF;
-    }
+    for (int i = 0; i < 32; i++) result[42 + i] = return_hash[i];
     
     // Revert reason hash (32 bytes)
-    for (int i = 0; i < 8; i++) {
-        result[74 + i*4] = (revert_hash[i] >> 0) & 0xFF;
-        result[74 + i*4+1] = (revert_hash[i] >> 8) & 0xFF;
-        result[74 + i*4+2] = (revert_hash[i] >> 16) & 0xFF;
-        result[74 + i*4+3] = (revert_hash[i] >> 24) & 0xFF;
-    }
+    for (int i = 0; i < 32; i++) result[74 + i] = revert_hash[i];
 }
 
-// Device function to decode RLP transaction structure
-__device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit) {
-    if (length < 32) return false;
-    
-    // Simplified RLP decoding for transaction structure
-    // Real implementation would parse: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
-    
-    uint32_t offset = 0;
-    
-    // Skip RLP list header (simplified)
-    if (tx_data[0] >= 0xf8) {
-        offset = 1 + (tx_data[0] - 0xf7);
-    } else if (tx_data[0] >= 0xc0) {
-        offset = 1;
-    }
-    
-    if (offset >= length) return false;
-    
-    // Extract gas limit (simplified - assume it's at a fixed offset)
-    // In real implementation, this would properly parse RLP structure
-    *gas_limit = 21000; // Default gas limit
-    
-    // Basic validation: check for minimum transaction structure
-    bool has_signature = (length >= offset + 65); // At least r, s, v components
-    bool has_basic_fields = (length >= offset + 32); // Basic transaction fields
-    
-    return has_signature && has_basic_fields;
-}
-
-// Device function to compute transaction hash
-__device__ void compute_transaction_hash(uint8_t* tx_data, uint32_t length, uint32_t* hash_out) {
-    // Simplified Keccak-256 hash computation
-    uint64_t state[25] = {0};
-    
-    // Absorption phase (simplified)
-    uint32_t blocks = (length + 135) / 136; // 136 = rate for Keccak-256
-    
-    for (uint32_t block = 0; block < blocks; block++) {
-        uint32_t block_start = block * 136;
-        uint32_t block_size = (block_start + 136 <= length) ? 136 : (length - block_start);
-        
-        // XOR input into state
-        for (uint32_t i = 0; i < block_size && i < 136; i += 8) {
-            uint64_t word = 0;
-            for (int j = 0; j < 8 && block_start + i + j < length; j++) {
-                word |= ((uint64_t)tx_data[block_start + i + j]) << (j * 8);
-            }
-            if ((i / 8) < 17) { // Only first 17 words of state
-                state[i / 8] ^= word;
-            }
+// RLP helpers and decoder for legacy transactions
+__device__ bool rlp_read_len(const uint8_t* p, uint32_t end, uint32_t pos, bool list, uint32_t* len_out, uint32_t* hsz_out) {
+    if (pos >= end) return false;
+    uint8_t b = p[pos];
+    if (!list) {
+        if (b <= 0x7f) { *len_out = 1; *hsz_out = 0; return true; }
+        if (b <= 0xb7) { uint32_t l = (uint32_t)(b - 0x80); *len_out = l; *hsz_out = 1; return pos+1+l <= end; }
+        if (b <= 0xbf) {
+            uint32_t lsize = (uint32_t)(b - 0xb7);
+            if (pos+1+lsize > end) return false;
+            uint32_t l = 0; for (uint32_t i=0;i<lsize;i++){ l = (l<<8) | p[pos+1+i]; }
+            *len_out = l; *hsz_out = 1+lsize; return pos+1+lsize+l <= end;
         }
-        
-        // Apply Keccak-f[1600] permutation (simplified)
-        keccak_f1600_simplified(state);
-    }
-    
-    // Extract hash (first 256 bits)
-    for (int i = 0; i < 8; i++) {
-        hash_out[i] = (uint32_t)(state[i / 2] >> ((i % 2) * 32));
+        return false;
+    } else {
+        if (b <= 0xf7) { uint32_t l = (uint32_t)(b - 0xc0); *len_out = l; *hsz_out = 1; return pos+1+l <= end; }
+        if (b <= 0xff) {
+            uint32_t lsize = (uint32_t)(b - 0xf7);
+            if (pos+1+lsize > end) return false;
+            uint32_t l = 0; for (uint32_t i=0;i<lsize;i++){ l = (l<<8) | p[pos+1+i]; }
+            *len_out = l; *hsz_out = 1+lsize; return pos+1+lsize+l <= end;
+        }
+        return false;
     }
 }
 
-// Device function for signature recovery
-__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length, uint8_t* state_data) {
+__device__ bool rlp_next_item(const uint8_t* p, uint32_t end, uint32_t pos, uint32_t* item_off, uint32_t* item_len, uint32_t* next_pos) {
+    if (pos >= end) return false;
+    uint8_t b = p[pos];
+    if (b <= 0x7f){ *item_off = pos; *item_len = 1; *next_pos = pos+1; return true; }
+    if (b <= 0xb7){ uint32_t l=b-0x80; if (pos+1+l>end) return false; *item_off=pos+1; *item_len=l; *next_pos=pos+1+l; return true; }
+    if (b <= 0xbf){ uint32_t lsize=b-0xb7; if (pos+1+lsize> end) return false; uint32_t l=0; for(uint32_t i=0;i<lsize;i++){ l=(l<<8)|p[pos+1+i]; } if (pos+1+lsize+l> end) return false; *item_off=pos+1+lsize; *item_len=l; *next_pos=pos+1+lsize+l; return true; }
+    return false;
+}
+
+__device__ bool decode_rlp_transaction(uint8_t* tx_data, uint32_t length, uint64_t* gas_limit,
+                                       uint32_t* to_off, uint32_t* to_len,
+                                       uint32_t* data_off, uint32_t* data_len,
+                                       uint8_t* v_out) {
+    if (length < 3) return false;
+    if (tx_data[0] < 0xc0) return false; // expect list
+    uint32_t list_len=0, hdr=0;
+    if (!rlp_read_len(tx_data, length, 0, true, &list_len, &hdr)) return false;
+    uint32_t pos = hdr; uint32_t end = hdr + list_len; if (end > length) return false;
+    uint32_t off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_out=0;
+    for (int idx=0; idx<9; idx++) {
+        if (!rlp_next_item(tx_data, end, pos, &off, &len, &pos)) return false;
+        if (idx == 2) {
+            uint64_t gl=0; for (uint32_t i=0;i<len;i++){ gl = (gl<<8) | (uint64_t)tx_data[off+i]; }
+            *gas_limit = gl;
+        } else if (idx == 3) { *to_off = off; *to_len = len; }
+        else if (idx == 5) { *data_off = off; *data_len = len; }
+        else if (idx == 6) { if (len==1) *v_out = tx_data[off]; }
+    }
+    return (*gas_limit > 0);
+}
+
+// Device function to compute transaction hash (Keccak-256)
+__device__ void compute_transaction_hash(uint8_t* tx_data, uint32_t length, uint8_t* hash_out32) {
+    keccak256(tx_data, length, hash_out32);
+}
+
+// Device function for signature validation (structural + low-s)
+__device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length) {
     if (length < 65) return false;
     
     // Extract signature components (r, s, v) from end of transaction
@@ -283,115 +254,97 @@ __device__ bool recover_transaction_signature(uint8_t* tx_data, uint32_t length,
     uint8_t* sig_s = &tx_data[length - 33];
     uint8_t v = tx_data[length - 1];
     
-    // Simplified signature validation
-    // Check v value is valid (27, 28, or EIP-155 protected)
     bool valid_v = (v == 27 || v == 28 || v >= 35);
-    
-    // Check r and s are not zero
     bool r_nonzero = false, s_nonzero = false;
-    for (int i = 0; i < 32; i++) {
-        if (sig_r[i] != 0) r_nonzero = true;
-        if (sig_s[i] != 0) s_nonzero = true;
-    }
-    
-    // In full implementation, would perform elliptic curve signature recovery
-    // For now, return basic validation result
-    return valid_v && r_nonzero && s_nonzero;
+    for (int i = 0; i < 32; i++) { if (sig_r[i] != 0) r_nonzero = true; if (sig_s[i] != 0) s_nonzero = true; }
+    if (!(valid_v && r_nonzero && s_nonzero)) return false;
+    const uint8_t secp256k1n_half[32] = {
+        0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
+        0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0
+    };
+    for (int i=0;i<32;i++) { if (sig_s[i] < secp256k1n_half[i]) break; if (sig_s[i] > secp256k1n_half[i]) return false; }
+    return true;
 }
 
-// Device function for EVM execution simulation
+// Device function for simplified EVM gas/accounting and return data hashing
 __device__ uint8_t execute_evm_transaction(
     uint8_t* tx_data, uint32_t length, uint8_t* state_data, uint8_t* access_list,
-    uint64_t* gas_used, uint32_t* return_hash, uint32_t* revert_hash
+    uint64_t* gas_used, uint8_t* return_hash32, uint8_t* revert_hash32,
+    uint32_t data_off, uint32_t data_len, uint32_t to_off, uint32_t to_len, uint64_t gas_limit
 ) {
-    // Simplified EVM execution simulation
-    // In full implementation, this would:
-    // 1. Load account states from state_data
-    // 2. Execute transaction against EVM
-    // 3. Update state and compute gas usage
-    // 4. Handle reverts and return data
-    
-    *gas_used = 21000; // Base transaction cost
-    
-    // Simulate different execution outcomes based on transaction data
-    if (length < 100) {
-        // Simple transfer - always succeeds
-        return 0; // success
-    } else if (tx_data[50] == 0xfd) { // REVERT opcode simulation
-        // Simulate revert with reason
-        compute_simple_hash(tx_data + 50, 32, revert_hash);
-        *gas_used += 5000; // Additional gas for execution
-        return 1; // revert
-    } else if (tx_data[60] == 0xff) { // Simulate out of gas
-        *gas_used = 1000000; // High gas usage
-        return 2; // out of gas
-    } else {
-        // Contract execution - simulate success with return data
-        compute_simple_hash(tx_data + 100, 32, return_hash);
-        *gas_used += 50000; // Contract execution gas
-        return 0; // success
-    }
+    uint64_t gas = 21000ULL;
+    for (uint32_t i=0;i<data_len;i++) gas += (tx_data[data_off+i] == 0) ? 4 : 16;
+    bool is_transfer = (data_len == 0 && to_len == 20);
+    if (!is_transfer) gas += 50000ULL;
+    *gas_used = gas;
+    if (gas > gas_limit) { keccak256(tx_data + data_off, data_len, revert_hash32); return 2; }
+    keccak256(tx_data + data_off, data_len, return_hash32); return 0;
 }
 
-// Simplified Keccak-f[1600] permutation
-__device__ void keccak_f1600_simplified(uint64_t state[25]) {
-    // Simplified version with reduced rounds for GPU efficiency
-    for (int round = 0; round < 12; round++) { // Reduced from 24 rounds
-        // Theta step (simplified)
+// Full Keccak-f[1600] and Keccak-256 sponge
+__device__ void keccak_f1600(uint64_t s[25]) {
+    const int R[25] = {
+        0,  1, 62, 28, 27,
+        36, 44, 6,  55, 20,
+        3,  10, 43, 25, 39,
+        41, 45, 15, 21, 8,
+        18, 2,  61, 56, 14
+    };
+    for (int round = 0; round < 24; round++) {
         uint64_t C[5];
-        for (int x = 0; x < 5; x++) {
-            C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        
-        for (int x = 0; x < 5; x++) {
-            uint64_t D = C[(x + 4) % 5] ^ rotl64(C[(x + 1) % 5], 1);
-            for (int y = 0; y < 5; y++) {
-                state[y * 5 + x] ^= D;
+        for (int x = 0; x < 5; x++) C[x] = s[x] ^ s[x+5] ^ s[x+10] ^ s[x+15] ^ s[x+20];
+        uint64_t D0 = rotl64(C[1],1) ^ C[4];
+        uint64_t D1 = rotl64(C[2],1) ^ C[0];
+        uint64_t D2 = rotl64(C[3],1) ^ C[1];
+        uint64_t D3 = rotl64(C[4],1) ^ C[2];
+        uint64_t D4 = rotl64(C[0],1) ^ C[3];
+        for (int i=0;i<25;i+=5){ s[i]^=D0; s[i+1]^=D1; s[i+2]^=D2; s[i+3]^=D3; s[i+4]^=D4; }
+        uint64_t B[25];
+        for (int y=0;y<5;y++){
+            for (int x=0;x<5;x++){
+                int i = x + 5*y;
+                int X = y;
+                int Y = (2*x + 3*y) % 5;
+                const int rot = R[i];
+                B[X + 5*Y] = (rot==0) ? s[i] : rotl64(s[i], rot);
             }
         }
-        
-        // Simplified rho and pi steps
-        uint64_t temp = state[1];
-        for (int i = 0; i < 24; i++) {
-            int j = keccak_rotation_offsets[i];
-            uint64_t temp2 = state[j];
-            state[j] = rotl64(temp, i + 1);
-            temp = temp2;
-        }
-        
-        // Chi step (simplified)
-        for (int y = 0; y < 5; y++) {
-            uint64_t temp[5];
-            for (int x = 0; x < 5; x++) {
-                temp[x] = state[y * 5 + x];
-            }
-            for (int x = 0; x < 5; x++) {
-                state[y * 5 + x] = temp[x] ^ ((~temp[(x + 1) % 5]) & temp[(x + 2) % 5]);
+        for (int y=0;y<5;y++){
+            for (int x=0;x<5;x++){
+                int i = x + 5*y;
+                s[i] = B[i] ^ ((~B[(i+1)%5 + 5*y]) & B[(i+2)%5 + 5*y]);
             }
         }
-        
-        // Iota step
-        state[0] ^= keccak_round_constants[round % 24];
+        s[0] ^= keccak_round_constants[round];
     }
 }
 
-// Simple hash function for return data and revert reasons
-__device__ void compute_simple_hash(uint8_t* data, uint32_t length, uint32_t* hash_out) {
-    uint64_t hash = 0x123456789abcdef0ULL;
-    
-    for (uint32_t i = 0; i < length; i++) {
-        hash ^= ((uint64_t)data[i]) << (i % 64);
-        hash = rotl64(hash, 1);
+__device__ void keccak256(const uint8_t* in, uint32_t inlen, uint8_t out32[32]) {
+    uint64_t s[25]; for (int i=0;i<25;i++) s[i]=0ULL;
+    const uint32_t rate = 136; uint32_t off = 0;
+    while (inlen >= rate) {
+        for (int i=0;i<rate/8;i++){
+            uint64_t w=0; for (int j=0;j<8;j++) w |= ((uint64_t)in[off + i*8 + j]) << (8*j);
+            s[i] ^= w;
+        }
+        keccak_f1600(s); off += rate; inlen -= rate;
     }
-    
-    // Split 64-bit hash into two 32-bit values and replicate
-    uint32_t h1 = (uint32_t)(hash >> 32);
-    uint32_t h2 = (uint32_t)(hash & 0xFFFFFFFF);
-    
-    for (int i = 0; i < 8; i++) {
-        hash_out[i] = (i % 2 == 0) ? h1 : h2;
+    uint8_t block[136]; for (int i=0;i<136;i++) block[i]=0;
+    for (uint32_t i=0;i<inlen;i++) block[i] = in[off+i];
+    block[inlen] = 0x01; block[rate-1] |= 0x80;
+    for (int i=0;i<rate/8;i++){
+        uint64_t w=0; for (int j=0;j<8;j++) w |= ((uint64_t)block[i*8+j]) << (8*j);
+        s[i] ^= w;
+    }
+    keccak_f1600(s);
+    for (int i=0;i<4;i++){
+        uint64_t w = s[i]; for (int j=0;j<8;j++) out32[i*8 + j] = (uint8_t)((w >> (8*j)) & 0xFF);
     }
 }
+
+// (removed) simple hash function, using keccak256 instead
 
 // Host functions callable from Go
 extern "C" {
@@ -589,7 +542,7 @@ cleanup:
 }
 
 // Enhanced transaction processing with full execution context
-int cuda_process_transactions_full(void* txs, void* state_data, void* access_lists, int count, void* results) {
+int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, int count, void* results) {
     if (!txs || !results || count <= 0) {
         return -1;
     }
@@ -676,14 +629,10 @@ int cuda_process_transactions_full(void* txs, void* state_data, void* access_lis
         if (error != cudaSuccess) goto cleanup_full;
     }
     
-    // Create lengths array (simplified - assume average 200 bytes per tx)
-    h_lengths = (uint32_t*)malloc(lengths_size);
-    for (int i = 0; i < count; i++) {
-        h_lengths[i] = 200; // Average transaction size
-    }
-    
+    // Copy provided lengths from host
+    if (!tx_lengths) { cudaFree(d_txs); cudaFree(d_lengths); cudaFree(d_state_data); cudaFree(d_access_lists); cudaFree(d_results); return -1; }
+    h_lengths = (uint32_t*)tx_lengths;
     error = cudaMemcpy(d_lengths, h_lengths, lengths_size, cudaMemcpyHostToDevice);
-    free(h_lengths);
     if (error != cudaSuccess) goto cleanup_full;
     
     // Launch enhanced kernel with full execution context
@@ -714,8 +663,8 @@ cleanup_full:
 
 // Legacy transaction processing (for backward compatibility)
 int cuda_process_transactions(void* txs, int count, void* results) {
-    // Call enhanced version with null state data and access lists
-    return cuda_process_transactions_full(txs, NULL, NULL, count, results);
+    // Not supported without lengths; return error
+    return -1;
 }
 
 // Cleanup CUDA resources

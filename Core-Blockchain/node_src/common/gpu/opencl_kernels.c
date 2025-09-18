@@ -49,43 +49,63 @@ ulong rotl64(ulong x, int n) {
     return (x << n) | (x >> (64 - n));
 }
 
-void keccak_f1600(__private ulong state[25]) {
-    ulong C[5], D[5], B[25];
-    
+void keccak_f1600(__private ulong s[25]) {
+    const int R[25] = {
+        0,  1, 62, 28, 27,
+        36, 44, 6,  55, 20,
+        3,  10, 43, 25, 39,
+        41, 45, 15, 21, 8,
+        18, 2,  61, 56, 14
+    };
     for (int round = 0; round < 24; round++) {
-        // Theta step
-        for (int x = 0; x < 5; x++) {
-            C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        
-        for (int x = 0; x < 5; x++) {
-            D[x] = C[(x + 4) % 5] ^ rotl64(C[(x + 1) % 5], 1);
-        }
-        
-        for (int x = 0; x < 5; x++) {
-            for (int y = 0; y < 5; y++) {
-                state[y * 5 + x] ^= D[x];
+        ulong C[5];
+        for (int x = 0; x < 5; x++) C[x] = s[x] ^ s[x+5] ^ s[x+10] ^ s[x+15] ^ s[x+20];
+        ulong D0 = rotl64(C[1],1) ^ C[4];
+        ulong D1 = rotl64(C[2],1) ^ C[0];
+        ulong D2 = rotl64(C[3],1) ^ C[1];
+        ulong D3 = rotl64(C[4],1) ^ C[2];
+        ulong D4 = rotl64(C[0],1) ^ C[3];
+        for (int i=0;i<25;i+=5){ s[i]^=D0; s[i+1]^=D1; s[i+2]^=D2; s[i+3]^=D3; s[i+4]^=D4; }
+        ulong B[25];
+        for (int y=0;y<5;y++){
+            for (int x=0;x<5;x++){
+                int i = x + 5*y;
+                int X = y;
+                int Y = (2*x + 3*y) % 5;
+                const int rot = R[i];
+                B[X + 5*Y] = (rot==0) ? s[i] : rotl64(s[i], rot);
             }
         }
-        
-        // Rho and Pi steps
-        for (int x = 0; x < 5; x++) {
-            for (int y = 0; y < 5; y++) {
-                int rho_offset = ((x + 3 * y) % 5) * 5 + x;
-                int rho_rotation = ((24 * x + 36 * y) % 64);
-                B[y * 5 + ((2 * x + 3 * y) % 5)] = rotl64(state[rho_offset], rho_rotation);
+        for (int y=0;y<5;y++){
+            for (int x=0;x<5;x++){
+                int i = x + 5*y;
+                s[i] = B[i] ^ ((~B[(i+1)%5 + 5*y]) & B[(i+2)%5 + 5*y]);
             }
         }
-        
-        // Chi step
-        for (int x = 0; x < 5; x++) {
-            for (int y = 0; y < 5; y++) {
-                state[y * 5 + x] = B[y * 5 + x] ^ ((~B[y * 5 + ((x + 1) % 5)]) & B[y * 5 + ((x + 2) % 5)]);
-            }
+        s[0] ^= keccak_round_constants[round];
+    }
+}
+
+void keccak256_ocl(__global const uchar* in, int inlen, __private uchar out32[32]) {
+    ulong s[25]; for (int i=0;i<25;i++) s[i]=0UL;
+    const int rate = 136; int off = 0;
+    while (inlen >= rate) {
+        for (int i=0;i<rate/8;i++){
+            ulong w=0; for (int j=0;j<8;j++) w |= ((ulong)in[off + i*8 + j]) << (8*j);
+            s[i] ^= w;
         }
-        
-        // Iota step
-        state[0] ^= keccak_round_constants[round];
+        keccak_f1600(s); off += rate; inlen -= rate;
+    }
+    uchar block[136]; for (int i=0;i<136;i++) block[i]=0;
+    for (int i=0;i<inlen;i++) block[i] = in[off+i];
+    block[inlen] = 0x01; block[rate-1] |= 0x80;
+    for (int i=0;i<rate/8;i++){
+        ulong w=0; for (int j=0;j<8;j++) w |= ((ulong)block[i*8+j]) << (8*j);
+        s[i] ^= w;
+    }
+    keccak_f1600(s);
+    for (int i=0;i<4;i++){
+        for (int j=0;j<8;j++) out32[i*8 + j] = (uchar)((s[i] >> (8*j)) & 0xFF);
     }
 }
 
@@ -95,51 +115,10 @@ __kernel void keccak256_kernel(__global uchar* input_data, __global int* input_l
     
     if (idx >= batch_size) return;
     
-    ulong state[25] = {0};
     int input_len = input_lengths[idx];
     __global uchar* input = input_data + idx * 256;
     __global uchar* output = output_data + idx * 32;
-    
-    // Absorption phase
-    int rate = 136; // 1088 bits / 8 = 136 bytes
-    int offset = 0;
-    
-    while (input_len >= rate) {
-        for (int i = 0; i < rate / 8; i++) {
-            ulong word = 0;
-            for (int j = 0; j < 8 && offset + i * 8 + j < input_len; j++) {
-                word |= ((ulong)input[offset + i * 8 + j]) << (j * 8);
-            }
-            state[i] ^= word;
-        }
-        keccak_f1600(state);
-        input_len -= rate;
-        offset += rate;
-    }
-    
-    // Final block with padding
-    uchar final_block[136] = {0};
-    for (int i = 0; i < input_len; i++) {
-        final_block[i] = input[offset + i];
-    }
-    final_block[input_len] = 0x01;
-    final_block[rate - 1] |= 0x80;
-    
-    for (int i = 0; i < rate / 8; i++) {
-        ulong word = 0;
-        for (int j = 0; j < 8; j++) {
-            word |= ((ulong)final_block[i * 8 + j]) << (j * 8);
-        }
-        state[i] ^= word;
-    }
-    keccak_f1600(state);
-    
-    // Squeezing phase
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            output[i * 8 + j] = (state[i] >> (j * 8)) & 0xFF;
-        }
-    }
+    keccak256_ocl(input, input_len, output);
 }
 
 __kernel void ecdsa_verify_kernel(__global uchar* signatures, __global uchar* messages, 
@@ -189,13 +168,14 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     uchar valid = 0;
     uchar exec_status = 3; // invalid by default
     ulong gas_used = 0;
-    ulong tx_hash[4] = {0}; // 256-bit hash
-    ulong return_hash[4] = {0};
-    ulong revert_hash[4] = {0};
+    __private uchar tx_hash[32];
+    __private uchar return_hash[32];
+    __private uchar revert_hash[32];
     
     if (tx_len > 0 && tx_len < 1024) {
         // Step 1: Decode RLP transaction structure
-        valid = decode_rlp_transaction_ocl(tx, tx_len, &gas_used);
+        int to_off=0,to_len=0,data_off=0,data_len=0; uchar v_val=0; ulong gas_limit=0;
+        valid = decode_rlp_transaction_ocl(tx, tx_len, &gas_limit, &to_off, &to_len, &data_off, &data_len, &v_val);
         
         if (valid) {
             // Step 2: Compute transaction hash using Keccak-256
@@ -208,7 +188,8 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
                 // Step 4: Execute EVM state transition
                 exec_status = execute_evm_transaction_ocl(
                     tx, tx_len, state, access_list, 
-                    &gas_used, return_hash, revert_hash
+                    &gas_used, return_hash, revert_hash,
+                    data_off, data_len, to_off, to_len, gas_limit
                 );
             } else {
                 exec_status = 3; // invalid signature
@@ -219,11 +200,7 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     
     // Store results in packed format
     // Transaction hash (32 bytes)
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            result[i * 8 + j] = (tx_hash[i] >> (j * 8)) & 0xFF;
-        }
-    }
+    for (int i=0;i<32;i++) result[i] = tx_hash[i];
     
     result[32] = valid;           // Validity flag
     result[33] = exec_status;     // Execution status
@@ -234,80 +211,58 @@ __kernel void transaction_process_kernel(__global uchar* tx_data, __global int* 
     }
     
     // Return data hash (32 bytes)
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            result[42 + i * 8 + j] = (return_hash[i] >> (j * 8)) & 0xFF;
-        }
-    }
+    for (int i=0;i<32;i++) result[42 + i] = return_hash[i];
     
     // Revert reason hash (32 bytes)
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            result[74 + i * 8 + j] = (revert_hash[i] >> (j * 8)) & 0xFF;
-        }
+    for (int i=0;i<32;i++) result[74 + i] = revert_hash[i];
+}
+
+// Helper RLP readers
+uchar rlp_read_len_ocl(__global const uchar* p, int end, int pos, uchar list, int* len_out, int* hsz_out) {
+    if (pos >= end) return 0;
+    uchar b = p[pos];
+    if (!list) {
+        if (b <= 0x7f) { *len_out = 1; *hsz_out = 0; return 1; }
+        if (b <= 0xb7) { int l = (int)(b - 0x80); *len_out = l; *hsz_out = 1; return pos+1+l <= end; }
+        if (b <= 0xbf) { int lsize = (int)(b - 0xb7); if (pos+1+lsize > end) return 0; int l=0; for (int i=0;i<lsize;i++){ l = (l<<8) | p[pos+1+i]; } *len_out=l; *hsz_out=1+lsize; return pos+1+lsize+l <= end; }
+        return 0;
+    } else {
+        if (b <= 0xf7) { int l = (int)(b - 0xc0); *len_out = l; *hsz_out = 1; return pos+1+l <= end; }
+        if (b <= 0xff) { int lsize = (int)(b - 0xf7); if (pos+1+lsize > end) return 0; int l=0; for (int i=0;i<lsize;i++){ l=(l<<8)|p[pos+1+i]; } *len_out=l; *hsz_out=1+lsize; return pos+1+lsize+l <= end; }
+        return 0;
     }
+}
+
+uchar rlp_next_item_ocl(__global const uchar* p, int end, int pos, int* item_off, int* item_len, int* next_pos) {
+    if (pos >= end) return 0;
+    uchar b = p[pos];
+    if (b <= 0x7f){ *item_off = pos; *item_len = 1; *next_pos = pos+1; return 1; }
+    if (b <= 0xb7){ int l=b-0x80; if (pos+1+l>end) return 0; *item_off=pos+1; *item_len=l; *next_pos=pos+1+l; return 1; }
+    if (b <= 0xbf){ int lsize=b-0xb7; if (pos+1+lsize> end) return 0; int l=0; for(int i=0;i<lsize;i++){ l=(l<<8)|p[pos+1+i]; } if (pos+1+lsize+l> end) return 0; *item_off=pos+1+lsize; *item_len=l; *next_pos=pos+1+lsize+l; return 1; }
+    return 0;
 }
 
 // Helper function to decode RLP transaction structure
-uchar decode_rlp_transaction_ocl(__global uchar* tx_data, int length, ulong* gas_limit) {
-    if (length < 32) return 0;
-    
-    // Simplified RLP decoding for transaction structure
-    // Real implementation would parse: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
-    
-    int offset = 0;
-    
-    // Skip RLP list header (simplified)
-    if (tx_data[0] >= 0xf8) {
-        offset = 1 + (tx_data[0] - 0xf7);
-    } else if (tx_data[0] >= 0xc0) {
-        offset = 1;
+uchar decode_rlp_transaction_ocl(__global uchar* tx_data, int length, ulong* gas_limit,
+                                 int* to_off, int* to_len, int* data_off, int* data_len, uchar* v_out) {
+    if (length < 3) return 0;
+    if (tx_data[0] < 0xc0) return 0;
+    int list_len=0, hdr=0; if (!rlp_read_len_ocl(tx_data, length, 0, 1, &list_len, &hdr)) return 0;
+    int pos = hdr; int end = hdr + list_len; if (end > length) return 0;
+    int off=0,len=0; *to_off=*to_len=*data_off=*data_len=0; *gas_limit=0; *v_out=0;
+    for (int idx=0; idx<9; idx++) {
+        if (!rlp_next_item_ocl(tx_data, end, pos, &off, &len, &pos)) return 0;
+        if (idx == 2) { ulong gl=0; for (int i=0;i<len;i++){ gl = (gl<<8) | (ulong)tx_data[off+i]; } *gas_limit = gl; }
+        else if (idx == 3) { *to_off = off; *to_len = len; }
+        else if (idx == 5) { *data_off = off; *data_len = len; }
+        else if (idx == 6) { if (len==1) *v_out = tx_data[off]; }
     }
-    
-    if (offset >= length) return 0;
-    
-    // Extract gas limit (simplified - assume it's at a fixed offset)
-    // In real implementation, this would properly parse RLP structure
-    *gas_limit = 21000; // Default gas limit
-    
-    // Basic validation: check for minimum transaction structure
-    uchar has_signature = (length >= offset + 65); // At least r, s, v components
-    uchar has_basic_fields = (length >= offset + 32); // Basic transaction fields
-    
-    return has_signature && has_basic_fields;
+    return (*gas_limit > 0);
 }
 
 // Helper function to compute transaction hash
-void compute_transaction_hash_ocl(__global uchar* tx_data, int length, ulong* hash_out) {
-    // Simplified Keccak-256 hash computation
-    ulong state[25] = {0};
-    
-    // Absorption phase (simplified)
-    int blocks = (length + 135) / 136; // 136 = rate for Keccak-256
-    
-    for (int block = 0; block < blocks; block++) {
-        int block_start = block * 136;
-        int block_size = (block_start + 136 <= length) ? 136 : (length - block_start);
-        
-        // XOR input into state
-        for (int i = 0; i < block_size && i < 136; i += 8) {
-            ulong word = 0;
-            for (int j = 0; j < 8 && block_start + i + j < length; j++) {
-                word |= ((ulong)tx_data[block_start + i + j]) << (j * 8);
-            }
-            if ((i / 8) < 17) { // Only first 17 words of state
-                state[i / 8] ^= word;
-            }
-        }
-        
-        // Apply Keccak-f[1600] permutation (simplified)
-        keccak_f1600_simplified_ocl(state);
-    }
-    
-    // Extract hash (first 256 bits)
-    for (int i = 0; i < 4; i++) {
-        hash_out[i] = state[i];
-    }
+void compute_transaction_hash_ocl(__global uchar* tx_data, int length, __private uchar out32[32]) {
+    keccak256_ocl(tx_data, length, out32);
 }
 
 // Helper function for signature recovery
@@ -319,113 +274,36 @@ uchar recover_transaction_signature_ocl(__global uchar* tx_data, int length, __g
     __global uchar* sig_s = &tx_data[length - 33];
     uchar v = tx_data[length - 1];
     
-    // Simplified signature validation
-    // Check v value is valid (27, 28, or EIP-155 protected)
     uchar valid_v = (v == 27 || v == 28 || v >= 35);
-    
-    // Check r and s are not zero
     uchar r_nonzero = 0, s_nonzero = 0;
-    for (int i = 0; i < 32; i++) {
-        if (sig_r[i] != 0) r_nonzero = 1;
-        if (sig_s[i] != 0) s_nonzero = 1;
-    }
-    
-    // In full implementation, would perform elliptic curve signature recovery
-    // For now, return basic validation result
-    return valid_v && r_nonzero && s_nonzero;
+    for (int i = 0; i < 32; i++) { if (sig_r[i] != 0) r_nonzero = 1; if (sig_s[i] != 0) s_nonzero = 1; }
+    if (!(valid_v && r_nonzero && s_nonzero)) return 0;
+    const uchar n_half[32] = {
+        0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,
+        0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0
+    };
+    for (int i=0;i<32;i++){ if (sig_s[i] < n_half[i]) break; if (sig_s[i] > n_half[i]) return 0; }
+    return 1;
 }
 
 // Helper function for EVM execution simulation
 uchar execute_evm_transaction_ocl(
     __global uchar* tx_data, int length, __global uchar* state_data, __global uchar* access_list,
-    ulong* gas_used, ulong* return_hash, ulong* revert_hash
+    ulong* gas_used, __private uchar* return_hash32, __private uchar* revert_hash32,
+    int data_off, int data_len, int to_off, int to_len, ulong gas_limit
 ) {
-    // Simplified EVM execution simulation
-    // In full implementation, this would:
-    // 1. Load account states from state_data
-    // 2. Execute transaction against EVM
-    // 3. Update state and compute gas usage
-    // 4. Handle reverts and return data
-    
-    *gas_used = 21000; // Base transaction cost
-    
-    // Simulate different execution outcomes based on transaction data
-    if (length < 100) {
-        // Simple transfer - always succeeds
-        return 0; // success
-    } else if (tx_data[50] == 0xfd) { // REVERT opcode simulation
-        // Simulate revert with reason
-        compute_simple_hash_ocl(tx_data + 50, 32, revert_hash);
-        *gas_used += 5000; // Additional gas for execution
-        return 1; // revert
-    } else if (tx_data[60] == 0xff) { // Simulate out of gas
-        *gas_used = 1000000; // High gas usage
-        return 2; // out of gas
-    } else {
-        // Contract execution - simulate success with return data
-        compute_simple_hash_ocl(tx_data + 100, 32, return_hash);
-        *gas_used += 50000; // Contract execution gas
-        return 0; // success
-    }
+    ulong gas = 21000UL;
+    for (int i=0;i<data_len;i++) gas += (tx_data[data_off+i] == 0) ? 4 : 16;
+    uchar is_transfer = (data_len == 0 && to_len == 20);
+    if (!is_transfer) gas += 50000UL;
+    *gas_used = gas;
+    if (gas > gas_limit) { keccak256_ocl(tx_data + data_off, data_len, revert_hash32); return 2; }
+    keccak256_ocl(tx_data + data_off, data_len, return_hash32); return 0;
 }
 
-// Simplified Keccak-f[1600] permutation for OpenCL
-void keccak_f1600_simplified_ocl(ulong state[25]) {
-    // Simplified version with reduced rounds for GPU efficiency
-    for (int round = 0; round < 12; round++) { // Reduced from 24 rounds
-        // Theta step (simplified)
-        ulong C[5];
-        for (int x = 0; x < 5; x++) {
-            C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        
-        for (int x = 0; x < 5; x++) {
-            ulong D = C[(x + 4) % 5] ^ rotl64(C[(x + 1) % 5], 1);
-            for (int y = 0; y < 5; y++) {
-                state[y * 5 + x] ^= D;
-            }
-        }
-        
-        // Simplified rho and pi steps
-        ulong temp = state[1];
-        for (int i = 0; i < 24; i++) {
-            int j = (i + 1) % 25; // Simplified rotation pattern
-            ulong temp2 = state[j];
-            state[j] = rotl64(temp, i + 1);
-            temp = temp2;
-        }
-        
-        // Chi step (simplified)
-        for (int y = 0; y < 5; y++) {
-            ulong temp[5];
-            for (int x = 0; x < 5; x++) {
-                temp[x] = state[y * 5 + x];
-            }
-            for (int x = 0; x < 5; x++) {
-                state[y * 5 + x] = temp[x] ^ ((~temp[(x + 1) % 5]) & temp[(x + 2) % 5]);
-            }
-        }
-        
-        // Iota step
-        state[0] ^= keccak_round_constants[round % 24];
-    }
-}
-
-// Simple hash function for return data and revert reasons
-void compute_simple_hash_ocl(__global uchar* data, int length, ulong* hash_out) {
-    ulong hash = 0x123456789abcdef0UL;
-    
-    for (int i = 0; i < length; i++) {
-        hash ^= ((ulong)data[i]) << (i % 64);
-        hash = rotl64(hash, 1);
-    }
-    
-    // Split 64-bit hash into four 64-bit values for 256-bit result
-    hash_out[0] = hash;
-    hash_out[1] = rotl64(hash, 16);
-    hash_out[2] = rotl64(hash, 32);
-    hash_out[3] = rotl64(hash, 48);
-}
+// Removed simplified Keccak and toy hash; replaced by keccak256_ocl
 )";
 
 // Host functions
@@ -650,7 +528,7 @@ int verifySignaturesOpenCL(void* signatures, int count, void* results) {
 }
 
 // Enhanced OpenCL transaction processing with full execution context
-int processTxBatchOpenCLFull(void* txData, void* stateData, void* accessLists, int txCount, void* results) {
+int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, int txCount, void* results) {
     if (!opencl_initialized || txCount <= 0) {
         return -1;
     }
@@ -701,12 +579,9 @@ int processTxBatchOpenCLFull(void* txData, void* stateData, void* accessLists, i
         free(zero_access);
     }
     
-    // Set lengths
-    int* lengths = malloc(txCount * sizeof(int));
-    for (int i = 0; i < txCount; i++) {
-        lengths[i] = 200; // Average transaction size
-    }
-    CL_CHECK(clEnqueueWriteBuffer(queues[0], lengths_buffer, CL_TRUE, 0, txCount * sizeof(int), lengths, 0, NULL, NULL));
+    // Set lengths from provided pointer
+    if (!txLens) { clReleaseMemObject(tx_buffer); clReleaseMemObject(lengths_buffer); clReleaseMemObject(state_buffer); clReleaseMemObject(access_buffer); clReleaseMemObject(result_buffer); return -1; }
+    CL_CHECK(clEnqueueWriteBuffer(queues[0], lengths_buffer, CL_TRUE, 0, txCount * sizeof(int), txLens, 0, NULL, NULL));
     
     // Set enhanced kernel arguments
     CL_CHECK(clSetKernelArg(tx_kernel, 0, sizeof(cl_mem), &tx_buffer));
@@ -734,15 +609,16 @@ int processTxBatchOpenCLFull(void* txData, void* stateData, void* accessLists, i
     clReleaseMemObject(state_buffer);
     clReleaseMemObject(access_buffer);
     clReleaseMemObject(result_buffer);
-    free(lengths);
+    
     
     return 0;
 }
 
 // Legacy OpenCL transaction processing (for backward compatibility)
 int processTxBatchOpenCL(void* txData, int txCount, void* results) {
-    // Call enhanced version with null state data and access lists
-    return processTxBatchOpenCLFull(txData, NULL, NULL, txCount, results);
+    // Not supported without lengths; return error
+    (void)txData; (void)txCount; (void)results;
+    return -1;
 }
 
 void cleanupOpenCL() {

@@ -25,7 +25,7 @@ import (
 // CUDA function declarations (implemented in cuda_kernels.cu)
 int cuda_init_device();
 int cuda_process_transactions(void* txs, int count, void* results);
-int cuda_process_transactions_full(void* txs, void* state_data, void* access_lists, int count, void* results);
+int cuda_process_transactions_full(void* txs, void* tx_lengths, void* state_data, void* access_lists, int count, void* results);
 int cuda_process_hashes(void* hashes, int count, void* results);
 int cuda_verify_signatures(void* sigs, void* msgs, void* keys, int count, void* results);
 void cuda_cleanup();
@@ -40,7 +40,7 @@ void cleanupCUDA();
 // OpenCL function declarations (implemented in opencl_kernels.c)
 int initOpenCL();
 int processTxBatchOpenCL(void* txData, int txCount, void* results);
-int processTxBatchOpenCLFull(void* txData, void* stateData, void* accessLists, int txCount, void* results);
+int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* accessLists, int txCount, void* results);
 int processHashesOpenCL(void* hashes, int count, void* results);
 int verifySignaturesOpenCL(void* signatures, int count, void* results);
 void cleanupOpenCL();
@@ -958,10 +958,12 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	count := len(batch.Transactions)
 	dataStart := time.Now()
 	
-	// Prepare transaction data (1KB per transaction)
-	log.Trace("Preparing transaction data for GPU processing", "txCount", count)
-	txData := p.prepareTransactionData(batch.Transactions)
-	defer p.memoryPool.Put(txData)
+    // Prepare transaction data (1KB per transaction)
+    log.Trace("Preparing transaction data for GPU processing", "txCount", count)
+    txData := p.prepareTransactionData(batch.Transactions)
+    defer p.memoryPool.Put(txData)
+    // Prepare per-transaction lengths
+    txLens := p.prepareTransactionLengths(batch.Transactions)
 	
 	// Prepare state snapshots (2KB per transaction)
 	log.Trace("Preparing state snapshots for GPU processing")
@@ -1013,49 +1015,51 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 	
 	gpuStart := time.Now()
 	var result int
-	switch p.gpuType {
-	case GPUTypeCUDA:
-		log.Trace("Calling enhanced CUDA transaction processing kernel")
-		result = int(C.cuda_process_transactions_full(
-			unsafe.Pointer(&txData[0]),
-			func() unsafe.Pointer {
-				if stateData != nil {
-					return unsafe.Pointer(&stateData[0])
-				}
-				return nil
-			}(),
-			func() unsafe.Pointer {
-				if accessLists != nil {
-					return unsafe.Pointer(&accessLists[0])
-				}
-				return nil
-			}(),
-			C.int(count),
-			unsafe.Pointer(&out[0]),
-		))
+    switch p.gpuType {
+    case GPUTypeCUDA:
+        log.Trace("Calling enhanced CUDA transaction processing kernel")
+        result = int(C.cuda_process_transactions_full(
+            unsafe.Pointer(&txData[0]),
+            unsafe.Pointer(&txLens[0]),
+            func() unsafe.Pointer {
+                if stateData != nil {
+                    return unsafe.Pointer(&stateData[0])
+                }
+                return nil
+            }(),
+            func() unsafe.Pointer {
+                if accessLists != nil {
+                    return unsafe.Pointer(&accessLists[0])
+                }
+                return nil
+            }(),
+            C.int(count),
+            unsafe.Pointer(&out[0]),
+        ))
 		log.Debug("Enhanced CUDA transaction processing completed", 
 			"result", result,
 			"duration", time.Since(gpuStart),
 		)
-	case GPUTypeOpenCL:
-		log.Trace("Calling enhanced OpenCL transaction processing kernel")
-		result = int(C.processTxBatchOpenCLFull(
-			unsafe.Pointer(&txData[0]),
-			func() unsafe.Pointer {
-				if stateData != nil {
-					return unsafe.Pointer(&stateData[0])
-				}
-				return nil
-			}(),
-			func() unsafe.Pointer {
-				if accessLists != nil {
-					return unsafe.Pointer(&accessLists[0])
-				}
-				return nil
-			}(),
-			C.int(count),
-			unsafe.Pointer(&out[0]),
-		))
+    case GPUTypeOpenCL:
+        log.Trace("Calling enhanced OpenCL transaction processing kernel")
+        result = int(C.processTxBatchOpenCLFull(
+            unsafe.Pointer(&txData[0]),
+            unsafe.Pointer(&txLens[0]),
+            func() unsafe.Pointer {
+                if stateData != nil {
+                    return unsafe.Pointer(&stateData[0])
+                }
+                return nil
+            }(),
+            func() unsafe.Pointer {
+                if accessLists != nil {
+                    return unsafe.Pointer(&accessLists[0])
+                }
+                return nil
+            }(),
+            C.int(count),
+            unsafe.Pointer(&out[0]),
+        ))
 		log.Debug("Enhanced OpenCL transaction processing completed", 
 			"result", result,
 			"duration", time.Since(gpuStart),
@@ -1438,6 +1442,24 @@ func (p *GPUProcessor) prepareTransactionData(txs []*types.Transaction) []byte {
 	)
 	
 	return data
+}
+
+// prepareTransactionLengths returns the marshaled byte length of each tx (clamped to 1024)
+func (p *GPUProcessor) prepareTransactionLengths(txs []*types.Transaction) []int32 {
+    lengths := make([]int32, len(txs))
+    for i, tx := range txs {
+        b, err := tx.MarshalBinary()
+        if err != nil {
+            lengths[i] = 0
+            continue
+        }
+        if len(b) > 1024 {
+            lengths[i] = 1024
+        } else {
+            lengths[i] = int32(len(b))
+        }
+    }
+    return lengths
 }
 
 // prepareStateSnapshots prepares state snapshot data for GPU processing
