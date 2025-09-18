@@ -13,19 +13,60 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// LoggingConfig controls how hybrid processor events are emitted.
+type LoggingConfig struct {
+	EnableDebug           bool          `json:"enableDebug"`
+	StrategyCooldown      time.Duration `json:"strategyCooldown"`
+	MetricsSampleInterval time.Duration `json:"metricsSampleInterval"`
+	WarningCooldown       time.Duration `json:"warningCooldown"`
+	SuccessCooldown       time.Duration `json:"successCooldown"`
+	BatchLogInterval      time.Duration `json:"batchLogInterval"`
+}
+
+func defaultLoggingConfig() *LoggingConfig {
+	return &LoggingConfig{
+		EnableDebug:           true,
+		StrategyCooldown:      10 * time.Second,
+		MetricsSampleInterval: time.Second,
+		WarningCooldown:       5 * time.Second,
+		SuccessCooldown:       30 * time.Second,
+		BatchLogInterval:      2 * time.Second,
+	}
+}
+
+func mergeLoggingConfig(cfg *LoggingConfig) *LoggingConfig {
+	def := defaultLoggingConfig()
+	if cfg == nil {
+		return def
+	}
+	merged := *cfg
+	if merged.StrategyCooldown <= 0 {
+		merged.StrategyCooldown = def.StrategyCooldown
+	}
+	if merged.MetricsSampleInterval <= 0 {
+		merged.MetricsSampleInterval = def.MetricsSampleInterval
+	}
+	if merged.WarningCooldown <= 0 {
+		merged.WarningCooldown = def.WarningCooldown
+	}
+	if merged.SuccessCooldown <= 0 {
+		merged.SuccessCooldown = def.SuccessCooldown
+	}
+	if merged.BatchLogInterval < 0 {
+		merged.BatchLogInterval = def.BatchLogInterval
+	}
+	return &merged
+}
+
 // HybridProcessor combines CPU and GPU processing with intelligent load balancing
 type HybridProcessor struct {
-	// Processing components
 	cpuProcessor *gopool.ParallelProcessor
 	gpuProcessor *gpu.GPUProcessor
 
-	// Load balancing
 	loadBalancer *LoadBalancer
+	config       *HybridConfig
+	logging      *LoggingConfig
 
-	// Configuration
-	config *HybridConfig
-
-	// Statistics
 	mu    sync.RWMutex
 	stats HybridStats
 
@@ -39,20 +80,9 @@ type HybridProcessor struct {
 	lastImbalanceWarning  time.Time
 	lastMetricsLog        time.Time
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-=======
-	strategyMu            sync.Mutex
-	lastStrategy          ProcessingStrategy
-	lastStrategyReason    string
-	lastStrategyLoggedAt  time.Time
-	lastStrategyBatch     int
-	lastThroughputWarning time.Time
-	lastThroughputSuccess time.Time
-	lastImbalanceWarning  time.Time
-	lastMetricsLog        time.Time
+	loggingMu    sync.Mutex
+	lastBatchLog time.Time
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-	// Shutdown coordination
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -60,28 +90,24 @@ type HybridProcessor struct {
 
 // HybridConfig holds configuration for hybrid processing
 type HybridConfig struct {
-	// CPU Configuration
 	CPUConfig *gopool.ProcessorConfig `json:"cpuConfig"`
+	GPUConfig *gpu.GPUConfig          `json:"gpuConfig"`
 
-	// GPU Configuration
-	GPUConfig *gpu.GPUConfig `json:"gpuConfig"`
-
-	// Load Balancing Configuration
 	EnableGPU             bool    `json:"enableGpu"`
-	GPUThreshold          int     `json:"gpuThreshold"`          // Minimum batch size for GPU
-	CPUGPURatio           float64 `json:"cpuGpuRatio"`           // 0.0 = all CPU, 1.0 = all GPU
-	AdaptiveLoadBalancing bool    `json:"adaptiveLoadBalancing"` // Enable adaptive load balancing
-	PerformanceMonitoring bool    `json:"performanceMonitoring"` // Enable performance monitoring
+	GPUThreshold          int     `json:"gpuThreshold"`
+	CPUGPURatio           float64 `json:"cpuGpuRatio"`
+	AdaptiveLoadBalancing bool    `json:"adaptiveLoadBalancing"`
+	PerformanceMonitoring bool    `json:"performanceMonitoring"`
 
-	// Performance Thresholds
-	MaxCPUUtilization float64       `json:"maxCpuUtilization"` // Max CPU utilization before GPU offload
-	MaxGPUUtilization float64       `json:"maxGpuUtilization"` // Max GPU utilization
-	LatencyThreshold  time.Duration `json:"latencyThreshold"`  // Max acceptable latency
-	ThroughputTarget  uint64        `json:"throughputTarget"`  // Target TPS
+	MaxCPUUtilization float64       `json:"maxCpuUtilization"`
+	MaxGPUUtilization float64       `json:"maxGpuUtilization"`
+	LatencyThreshold  time.Duration `json:"latencyThreshold"`
+	ThroughputTarget  uint64        `json:"throughputTarget"`
 
-	// Memory Management
-	MaxMemoryUsage       uint64 `json:"maxMemoryUsage"`       // Max total memory usage
-	GPUMemoryReservation uint64 `json:"gpuMemoryReservation"` // Reserved GPU memory
+	MaxMemoryUsage       uint64 `json:"maxMemoryUsage"`
+	GPUMemoryReservation uint64 `json:"gpuMemoryReservation"`
+
+	Logging *LoggingConfig `json:"logging,omitempty"`
 }
 
 // DefaultHybridConfig returns optimized hybrid configuration for i5-13500 (20 threads) + RTX 4000 SFF Ada
@@ -91,21 +117,17 @@ func DefaultHybridConfig() *HybridConfig {
 		CPUConfig:             gopool.DefaultProcessorConfig(),
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
-		GPUThreshold:          500,  // Aggressive threshold - use GPU for batches >= 500
-		CPUGPURatio:           0.90, // 90% GPU, 10% CPU for maximum GPU utilization
+		GPUThreshold:          500,
+		CPUGPURatio:           0.90,
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
-		MaxCPUUtilization:     0.95,                    // Allow CPU to reach 95% before shifting load
-		MaxGPUUtilization:     0.98,                    // Push RTX 4000 SFF Ada to 98% utilization
-		LatencyThreshold:      25 * time.Millisecond,   // Tighter latency target for faster confirmation
-		ThroughputTarget:      2000000,                 // 2M TPS stretch target for GPU-first execution
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-		ThroughputTarget:      2000000,                 // 2M TPS stretch target for GPU-first execution
-=======
-		ThroughputTarget:      2000000,                 // 2M TPS stretch target for GPU-first execution
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-		MaxMemoryUsage:        64 * 1024 * 1024 * 1024, // 64GB RAM available for blockchain workloads
-		GPUMemoryReservation:  18 * 1024 * 1024 * 1024, // Reserve 18GB GPU memory (leave 2GB for TinyLlama)
+		MaxCPUUtilization:     0.95,
+		MaxGPUUtilization:     0.98,
+		LatencyThreshold:      25 * time.Millisecond,
+		ThroughputTarget:      2000000,
+		MaxMemoryUsage:        64 * 1024 * 1024 * 1024,
+		GPUMemoryReservation:  18 * 1024 * 1024 * 1024,
+		Logging:               defaultLoggingConfig(),
 	}
 }
 
@@ -152,17 +174,17 @@ func NewHybridProcessor(config *HybridConfig) (*HybridProcessor, error) {
 	if config == nil {
 		config = DefaultHybridConfig()
 	}
+	logging := mergeLoggingConfig(config.Logging)
+	config.Logging = logging
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Initialize CPU processor
 	cpuProcessor, err := gopool.NewParallelProcessor(config.CPUConfig)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	// Initialize GPU processor if enabled
 	var gpuProcessor *gpu.GPUProcessor
 	if config.EnableGPU {
 		gpuProcessor, err = gpu.NewGPUProcessor(config.GPUConfig)
@@ -172,7 +194,6 @@ func NewHybridProcessor(config *HybridConfig) (*HybridProcessor, error) {
 		}
 	}
 
-	// Initialize load balancer
 	loadBalancer := &LoadBalancer{
 		adaptiveRatio:      config.CPUGPURatio,
 		lastAdjustment:     time.Now(),
@@ -184,11 +205,11 @@ func NewHybridProcessor(config *HybridConfig) (*HybridProcessor, error) {
 		gpuProcessor: gpuProcessor,
 		loadBalancer: loadBalancer,
 		config:       config,
+		logging:      logging,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 
-	// Start monitoring and load balancing
 	if config.PerformanceMonitoring {
 		processor.wg.Add(1)
 		go processor.performanceMonitor()
@@ -200,71 +221,23 @@ func NewHybridProcessor(config *HybridConfig) (*HybridProcessor, error) {
 	}
 
 	log.Info("Hybrid processor initialized",
-		"cpuEnabled", true,
-		"gpuEnabled", config.EnableGPU,
-		"gpuType", func() string {
-			if gpuProcessor != nil {
-				switch gpuProcessor.GetGPUType() {
-				case gpu.GPUTypeCUDA:
-					return "CUDA"
-				case gpu.GPUTypeOpenCL:
-					return "OpenCL"
-				default:
-					return "None"
-				}
+		"enableGPU", config.EnableGPU,
+		"cpuWorkers", func() int {
+			if config.CPUConfig != nil {
+				return config.CPUConfig.TxWorkers
 			}
-			return "None"
+			return 0
 		}(),
+		"gpuWorkers", func() int {
+			if config.GPUConfig != nil {
+				return config.GPUConfig.TxWorkers
+			}
+			return 0
+		}(),
+		"targetTPS", config.ThroughputTarget,
 	)
 
 	return processor, nil
-}
-
-// ProcessTransactionsBatch processes a batch of transactions using optimal CPU/GPU distribution
-func (h *HybridProcessor) ProcessTransactionsBatch(txs []*types.Transaction, callback func([]*TransactionResult, error)) error {
-	if len(txs) == 0 {
-		callback(nil, nil)
-		return nil
-	}
-
-	start := time.Now()
-	batchSize := len(txs)
-
-	strategy, reason := h.determineProcessingStrategy(batchSize)
-
-	h.mu.RLock()
-	currentTPS := h.stats.CurrentTPS
-	h.mu.RUnlock()
-
-	log.Trace("Hybrid processor received batch", "size", batchSize, "strategy", strategy.String(), "reason", reason, "currentTPS", currentTPS)
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-	strategy, reason := h.determineProcessingStrategy(batchSize)
-
-	h.mu.RLock()
-	currentTPS := h.stats.CurrentTPS
-	h.mu.RUnlock()
-
-	log.Trace("Hybrid processor received batch", "size", batchSize, "strategy", strategy.String(), "reason", reason, "currentTPS", currentTPS)
-=======
-	strategy, reason := h.determineProcessingStrategy(batchSize)
-
-	h.mu.RLock()
-	currentTPS := h.stats.CurrentTPS
-	h.mu.RUnlock()
-
-	log.Trace("Hybrid processor received batch", "size", batchSize, "strategy", strategy.String(), "reason", reason, "currentTPS", currentTPS)
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-
-	switch strategy {
-	case ProcessingStrategyCPUOnly:
-		return h.processCPUOnly(txs, callback, start)
-	case ProcessingStrategyGPUOnly:
-		return h.processGPUOnly(txs, callback, start)
-	case ProcessingStrategyHybrid:
-		return h.processHybrid(txs, callback, start)
-	default:
-		return h.processCPUOnly(txs, callback, start)
-	}
 }
 
 // ProcessingStrategy represents different processing approaches
@@ -289,6 +262,16 @@ func (p ProcessingStrategy) String() string {
 	}
 }
 
+func (h *HybridProcessor) debugLogsEnabled() bool {
+	return h.logging == nil || h.logging.EnableDebug
+}
+
+func (h *HybridProcessor) logDebug(msg string, ctx ...interface{}) {
+	if h.debugLogsEnabled() {
+		log.Debug(msg, ctx...)
+	}
+}
+
 // determineProcessingStrategy decides the optimal processing strategy
 func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (ProcessingStrategy, string) {
 	strategy := ProcessingStrategyCPUOnly
@@ -299,11 +282,6 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 		return strategy, reason
 	}
 
-<<<<<<< HEAD
-	// Small batches go to CPU
-=======
-	// Small batches go to CPU to avoid GPU overhead
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	if batchSize < h.config.GPUThreshold {
 		reason = "batch_below_gpu_threshold"
 		h.recordStrategyDecision(strategy, batchSize, reason, 0, 0, 0)
@@ -316,13 +294,6 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 	adaptiveRatio := h.loadBalancer.adaptiveRatio
 	h.loadBalancer.mu.RUnlock()
 
-<<<<<<< HEAD
-=======
-	strategy = ProcessingStrategyCPUOnly
-	reason = "default_cpu_path"
-
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-	// If CPU is overloaded, prefer GPU
 	if cpuUtil > h.config.MaxCPUUtilization {
 		if gpuUtil < h.config.MaxGPUUtilization {
 			strategy = ProcessingStrategyGPUOnly
@@ -335,7 +306,6 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 		return strategy, reason
 	}
 
-	// If GPU is underutilized and batch is large, use hybrid
 	if batchSize > h.config.GPUThreshold*2 && gpuUtil < 0.5 {
 		strategy = ProcessingStrategyHybrid
 		reason = "large_batch_low_gpu_utilization"
@@ -343,11 +313,6 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 		return strategy, reason
 	}
 
-<<<<<<< HEAD
-	// Default to GPU for large batches
-=======
-	// Default to GPU for very large batches
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	if batchSize > h.config.GPUThreshold*5 {
 		strategy = ProcessingStrategyGPUOnly
 		reason = "very_large_batch"
@@ -355,31 +320,50 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 		return strategy, reason
 	}
 
-<<<<<<< HEAD
-	return ProcessingStrategyCPUOnly
-=======
-	h.recordStrategyDecision(strategy, batchSize, reason, cpuUtil, gpuUtil, adaptiveRatio)
-	return strategy, reason
+	h.recordStrategyDecision(strategy, batchSize, "default_cpu_path", cpuUtil, gpuUtil, adaptiveRatio)
+	return ProcessingStrategyCPUOnly, "default_cpu_path"
 }
 
 func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, batchSize int, reason string, cpuUtil, gpuUtil, adaptiveRatio float64) {
-	logNow := false
-	var sinceLastLog time.Duration
+	interval := h.logging.StrategyCooldown
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	now := time.Now()
+
+	var (
+		sinceLastLog     time.Duration
+		shouldLogDetail  bool
+		previousStrategy ProcessingStrategy
+	)
 
 	h.strategyMu.Lock()
-	if strategy != h.lastStrategy || reason != h.lastStrategyReason || batchSize != h.lastStrategyBatch || time.Since(h.lastStrategyLoggedAt) > 10*time.Second {
+	previousStrategy = h.lastStrategy
+	if strategy != h.lastStrategy || reason != h.lastStrategyReason || batchSize != h.lastStrategyBatch || now.Sub(h.lastStrategyLoggedAt) >= interval {
+		shouldLogDetail = true
 		if !h.lastStrategyLoggedAt.IsZero() {
-			sinceLastLog = time.Since(h.lastStrategyLoggedAt)
+			sinceLastLog = now.Sub(h.lastStrategyLoggedAt)
 		}
-		h.lastStrategy = strategy
-		h.lastStrategyReason = reason
+		h.lastStrategyLoggedAt = now
 		h.lastStrategyBatch = batchSize
-		h.lastStrategyLoggedAt = time.Now()
-		logNow = true
+		h.lastStrategyReason = reason
 	}
+	h.lastStrategy = strategy
 	h.strategyMu.Unlock()
 
-	if !logNow {
+	if strategy != previousStrategy {
+		log.Info("Hybrid strategy change",
+			"from", previousStrategy.String(),
+			"to", strategy.String(),
+			"reason", reason,
+			"batchSize", batchSize,
+			"cpuUtil", cpuUtil,
+			"gpuUtil", gpuUtil,
+			"adaptiveRatio", adaptiveRatio,
+		)
+	}
+
+	if !shouldLogDetail || !h.debugLogsEnabled() {
 		return
 	}
 
@@ -389,20 +373,29 @@ func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, ba
 	loadRatio := h.stats.LoadBalancingRatio
 	h.mu.RUnlock()
 
-	log.Debug("Hybrid strategy decision", "strategy", strategy.String(), "reason", reason, "batchSize", batchSize, "cpuUtil", cpuUtil, "gpuUtil", gpuUtil, "adaptiveRatio", adaptiveRatio, "currentTPS", currentTPS, "avgLatency", avgLatency, "loadRatio", loadRatio, "sinceLastLog", sinceLastLog)
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
+	h.logDebug("Hybrid strategy decision",
+		"strategy", strategy.String(),
+		"reason", reason,
+		"batchSize", batchSize,
+		"cpuUtil", cpuUtil,
+		"gpuUtil", gpuUtil,
+		"adaptiveRatio", adaptiveRatio,
+		"currentTPS", currentTPS,
+		"avgLatency", avgLatency,
+		"loadRatio", loadRatio,
+		"sinceLastLog", sinceLastLog,
+	)
 }
 
 // processCPUOnly processes transactions using CPU only
 func (h *HybridProcessor) processCPUOnly(txs []*types.Transaction, callback func([]*TransactionResult, error), start time.Time) error {
-	log.Debug("Processing batch on CPU", "size", len(txs))
+	h.logDebug("Processing batch on CPU", "size", len(txs))
 
 	results := make([]*TransactionResult, len(txs))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	// Process in parallel using CPU workers
-	batchSize := 100 // Process in smaller batches
+	batchSize := 100
 	for i := 0; i < len(txs); i += batchSize {
 		end := i + batchSize
 		if end > len(txs) {
@@ -416,22 +409,19 @@ func (h *HybridProcessor) processCPUOnly(txs []*types.Transaction, callback func
 		err := h.cpuProcessor.SubmitTxTask(func() error {
 			defer wg.Done()
 
-			// Process batch
 			batchResults := make([]*TransactionResult, len(batch))
 			for j, tx := range batch {
 				batchResults[j] = &TransactionResult{
 					Hash:      tx.Hash(),
-					Valid:     true, // Simplified validation
+					Valid:     true,
 					GasUsed:   tx.Gas(),
 					Processed: true,
 				}
 			}
 
-			// Store results
 			mu.Lock()
 			copy(results[batchStart:batchStart+len(batch)], batchResults)
 			mu.Unlock()
-
 			return nil
 		}, nil)
 
@@ -441,22 +431,18 @@ func (h *HybridProcessor) processCPUOnly(txs []*types.Transaction, callback func
 		}
 	}
 
-	// Wait for completion
 	wg.Wait()
 
-	// Update statistics
 	duration := time.Since(start)
 	h.updateStats(uint64(len(txs)), 0, duration, ProcessingStrategyCPUOnly)
 
-<<<<<<< HEAD
-=======
-	throughput := float64(0)
 	if duration > 0 {
-		throughput = float64(len(txs)) / duration.Seconds()
+		throughput := float64(len(txs)) / duration.Seconds()
+		h.logDebug("CPU batch completed", "size", len(txs), "duration", duration, "throughput", throughput)
+	} else {
+		h.logDebug("CPU batch completed", "size", len(txs), "duration", duration)
 	}
-	log.Debug("CPU batch completed", "size", len(txs), "duration", duration, "throughput", throughput)
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	callback(results, nil)
 	return nil
 }
@@ -468,12 +454,8 @@ func (h *HybridProcessor) processGPUOnly(txs []*types.Transaction, callback func
 		return h.processCPUOnly(txs, callback, start)
 	}
 
-<<<<<<< HEAD
-=======
-	log.Debug("Processing batch on GPU", "size", len(txs))
+	h.logDebug("Processing batch on GPU", "size", len(txs))
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-	// Process transactions using GPU
 	err := h.gpuProcessor.ProcessTransactionsBatch(txs, func(results []*gpu.TxResult, err error) {
 		if err != nil {
 			log.Error("GPU batch processing failed", "size", len(txs), "error", err)
@@ -481,7 +463,6 @@ func (h *HybridProcessor) processGPUOnly(txs []*types.Transaction, callback func
 			return
 		}
 
-		// Convert GPU results to hybrid results
 		hybridResults := make([]*TransactionResult, len(results))
 		for i, result := range results {
 			hybridResults[i] = &TransactionResult{
@@ -493,20 +474,15 @@ func (h *HybridProcessor) processGPUOnly(txs []*types.Transaction, callback func
 			}
 		}
 
-		// Update statistics
 		duration := time.Since(start)
 		h.updateStats(0, uint64(len(txs)), duration, ProcessingStrategyGPUOnly)
 
-<<<<<<< HEAD
-		callback(hybridResults, nil)
-	})
-
-=======
-		throughput := float64(0)
 		if duration > 0 {
-			throughput = float64(len(txs)) / duration.Seconds()
+			throughput := float64(len(results)) / duration.Seconds()
+			h.logDebug("GPU batch completed", "size", len(results), "duration", duration, "throughput", throughput)
+		} else {
+			h.logDebug("GPU batch completed", "size", len(results), "duration", duration)
 		}
-		log.Debug("GPU batch completed", "size", len(results), "duration", duration, "throughput", throughput)
 
 		callback(hybridResults, nil)
 	})
@@ -514,8 +490,6 @@ func (h *HybridProcessor) processGPUOnly(txs []*types.Transaction, callback func
 	if err != nil {
 		log.Error("Failed to submit batch to GPU", "size", len(txs), "error", err)
 	}
-
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	return err
 }
 
@@ -526,20 +500,15 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 		return h.processCPUOnly(txs, callback, start)
 	}
 
-	// Determine split ratio
 	h.loadBalancer.mu.RLock()
 	ratio := h.loadBalancer.adaptiveRatio
 	h.loadBalancer.mu.RUnlock()
 
-	// Split transactions
 	gpuCount := int(float64(len(txs)) * ratio)
 	cpuCount := len(txs) - gpuCount
 
-<<<<<<< HEAD
-=======
-	log.Debug("Processing hybrid batch", "size", len(txs), "gpuCount", gpuCount, "cpuCount", cpuCount, "ratio", ratio)
+	h.logDebug("Processing hybrid batch", "size", len(txs), "gpuCount", gpuCount, "cpuCount", cpuCount, "ratio", ratio)
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	gpuTxs := txs[:gpuCount]
 	cpuTxs := txs[gpuCount:]
 
@@ -548,7 +517,6 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 	var processingError error
 	var mu sync.Mutex
 
-	// Process GPU batch
 	if len(gpuTxs) > 0 {
 		wg.Add(1)
 		go func() {
@@ -564,7 +532,6 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 					return
 				}
 
-				// Convert and store GPU results
 				for i, result := range gpuResults {
 					results[i] = &TransactionResult{
 						Hash:      result.Hash,
@@ -585,7 +552,6 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 		}()
 	}
 
-	// Process CPU batch
 	if len(cpuTxs) > 0 {
 		wg.Add(1)
 		go func() {
@@ -601,7 +567,6 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 					return
 				}
 
-				// Store CPU results
 				copy(results[gpuCount:], cpuResults)
 			})
 
@@ -614,7 +579,6 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 		}()
 	}
 
-	// Wait for both to complete
 	wg.Wait()
 
 	if processingError != nil {
@@ -623,34 +587,31 @@ func (h *HybridProcessor) processHybrid(txs []*types.Transaction, callback func(
 		return processingError
 	}
 
-	// Update statistics
 	duration := time.Since(start)
 	h.updateStats(uint64(cpuCount), uint64(gpuCount), duration, ProcessingStrategyHybrid)
 
-<<<<<<< HEAD
-=======
-	throughput := float64(0)
 	if duration > 0 {
-		throughput = float64(len(txs)) / duration.Seconds()
+		throughput := float64(len(txs)) / duration.Seconds()
+		h.logDebug("Hybrid batch completed", "size", len(txs), "gpuCount", gpuCount, "cpuCount", cpuCount, "duration", duration, "throughput", throughput)
+	} else {
+		h.logDebug("Hybrid batch completed", "size", len(txs), "gpuCount", gpuCount, "cpuCount", cpuCount, "duration", duration)
 	}
-	log.Debug("Hybrid batch completed", "size", len(txs), "gpuCount", gpuCount, "cpuCount", cpuCount, "duration", duration, "throughput", throughput)
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	callback(results, nil)
 	return nil
 }
 
 // processCPUBatch processes a batch using CPU
 func (h *HybridProcessor) processCPUBatch(txs []*types.Transaction, callback func([]*TransactionResult, error)) error {
-	log.Trace("Processing CPU sub-batch", "size", len(txs))
+	if h.debugLogsEnabled() {
+		log.Trace("Processing CPU sub-batch", "size", len(txs))
+	}
 
 	results := make([]*TransactionResult, len(txs))
-
-	// Simple CPU processing
 	for i, tx := range txs {
 		results[i] = &TransactionResult{
 			Hash:      tx.Hash(),
-			Valid:     true, // Simplified validation
+			Valid:     true,
 			GasUsed:   tx.Gas(),
 			Processed: true,
 		}
@@ -658,7 +619,9 @@ func (h *HybridProcessor) processCPUBatch(txs []*types.Transaction, callback fun
 
 	callback(results, nil)
 
-	log.Trace("CPU sub-batch completed", "size", len(txs))
+	if h.debugLogsEnabled() {
+		log.Trace("CPU sub-batch completed", "size", len(txs))
+	}
 	return nil
 }
 
@@ -674,6 +637,7 @@ type TransactionResult struct {
 // updateStats updates processing statistics
 func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duration time.Duration, strategy ProcessingStrategy) {
 	totalProcessed := cpuProcessed + gpuProcessed
+	now := time.Now()
 
 	var (
 		currentTPS  uint64
@@ -683,30 +647,11 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 		shouldCheer bool
 	)
 
-	now := time.Now()
-
 	h.mu.Lock()
-<<<<<<< HEAD
-	defer h.mu.Unlock()
-
-	h.stats.TotalProcessed += cpuProcessed + gpuProcessed
-	h.stats.CPUProcessed += cpuProcessed
-	h.stats.GPUProcessed += gpuProcessed
-
-	// Update average latency
-	if h.stats.AvgLatency == 0 {
-		h.stats.AvgLatency = duration
-	} else {
-		h.stats.AvgLatency = (h.stats.AvgLatency + duration) / 2
-	}
-
-	// Calculate current TPS
-=======
 	h.stats.TotalProcessed += totalProcessed
 	h.stats.CPUProcessed += cpuProcessed
 	h.stats.GPUProcessed += gpuProcessed
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	if duration > 0 {
 		if h.stats.AvgLatency == 0 {
 			h.stats.AvgLatency = duration
@@ -715,9 +660,6 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 		}
 	}
 
-<<<<<<< HEAD
-	// Update load balancing ratio
-=======
 	if duration > 0 && totalProcessed > 0 {
 		currentTPS = uint64(float64(totalProcessed) / duration.Seconds())
 		h.stats.CurrentTPS = currentTPS
@@ -725,7 +667,6 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 		currentTPS = h.stats.CurrentTPS
 	}
 
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 	if h.stats.TotalProcessed > 0 {
 		h.stats.LoadBalancingRatio = float64(h.stats.GPUProcessed) / float64(h.stats.TotalProcessed)
 	}
@@ -733,12 +674,21 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 	avgLatency = h.stats.AvgLatency
 	loadRatio = h.stats.LoadBalancingRatio
 
+	warnCooldown := h.logging.WarningCooldown
+	if warnCooldown <= 0 {
+		warnCooldown = 5 * time.Second
+	}
+	successCooldown := h.logging.SuccessCooldown
+	if successCooldown <= 0 {
+		successCooldown = 30 * time.Second
+	}
+
 	if h.config != nil && h.config.ThroughputTarget > 0 && totalProcessed > 0 {
 		target := h.config.ThroughputTarget
-		if currentTPS >= target && now.Sub(h.lastThroughputSuccess) > 30*time.Second {
+		if currentTPS >= target && now.Sub(h.lastThroughputSuccess) >= successCooldown {
 			shouldCheer = true
 			h.lastThroughputSuccess = now
-		} else if currentTPS < target && totalProcessed >= uint64(h.config.GPUThreshold) && now.Sub(h.lastThroughputWarning) > 5*time.Second {
+		} else if currentTPS < target && totalProcessed >= uint64(h.config.GPUThreshold) && now.Sub(h.lastThroughputWarning) >= warnCooldown {
 			shouldWarn = true
 			h.lastThroughputWarning = now
 		}
@@ -757,14 +707,31 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 }
 
 func (h *HybridProcessor) logBatchCompletion(strategy ProcessingStrategy, cpuProcessed, gpuProcessed uint64, duration time.Duration, currentTPS uint64, avgLatency time.Duration, loadRatio float64) {
-	log.Debug("Hybrid batch statistics", "strategy", strategy.String(), "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "tps", currentTPS, "avgLatency", avgLatency, "loadRatio", loadRatio)
+	if !h.debugLogsEnabled() {
+		return
+	}
+	interval := h.logging.BatchLogInterval
+	if interval > 0 {
+		h.loggingMu.Lock()
+		if !h.lastBatchLog.IsZero() && time.Since(h.lastBatchLog) < interval {
+			h.loggingMu.Unlock()
+			return
+		}
+		h.lastBatchLog = time.Now()
+		h.loggingMu.Unlock()
+	}
+	h.logDebug("Hybrid batch statistics", "strategy", strategy.String(), "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "tps", currentTPS, "avgLatency", avgLatency, "loadRatio", loadRatio)
 }
 
 // performanceMonitor continuously monitors system performance
 func (h *HybridProcessor) performanceMonitor() {
 	defer h.wg.Done()
 
-	ticker := time.NewTicker(1 * time.Second)
+	interval := h.logging.MetricsSampleInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -779,16 +746,18 @@ func (h *HybridProcessor) performanceMonitor() {
 
 // collectPerformanceMetrics collects current performance metrics
 func (h *HybridProcessor) collectPerformanceMetrics() {
-	// Safety check for nil pointers
 	if h == nil || h.loadBalancer == nil {
-		log.Trace("Hybrid performance monitor waiting for initialization")
+		if h.debugLogsEnabled() {
+			log.Trace("Hybrid performance monitor waiting for initialization")
+		}
 		return
 	}
 
-	// Get CPU stats with nil check
-	var cpuUtil float64
-	var avgCPULatency time.Duration
-	var cpuRunning int
+	var (
+		cpuUtil       float64
+		avgCPULatency time.Duration
+		cpuRunning    int
+	)
 	if h.cpuProcessor != nil && h.config != nil && h.config.CPUConfig != nil {
 		cpuStats := h.cpuProcessor.GetStats()
 		if h.config.CPUConfig.TxWorkers > 0 {
@@ -798,10 +767,11 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		cpuRunning = cpuStats.TxPoolRunning
 	}
 
-	// Get GPU stats with nil check
-	var gpuUtil float64
-	var avgGPULatency time.Duration
-	var gpuQueueSize int
+	var (
+		gpuUtil       float64
+		avgGPULatency time.Duration
+		gpuQueueSize  int
+	)
 	if h.gpuProcessor != nil && h.config != nil && h.config.GPUConfig != nil {
 		if h.gpuProcessor.IsGPUAvailable() {
 			gpuStats := h.gpuProcessor.GetStats()
@@ -813,7 +783,6 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		}
 	}
 
-	// Update load balancer metrics with safety checks
 	if h.loadBalancer != nil {
 		h.loadBalancer.mu.Lock()
 		h.loadBalancer.cpuUtilization = cpuUtil
@@ -821,7 +790,6 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		h.loadBalancer.avgCPULatency = avgCPULatency
 		h.loadBalancer.avgGPULatency = avgGPULatency
 
-		// Add performance snapshot
 		snapshot := PerformanceSnapshot{
 			Timestamp:     time.Now(),
 			CPULatency:    avgCPULatency,
@@ -838,7 +806,6 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		h.loadBalancer.mu.Unlock()
 	}
 
-	// Update hybrid stats with safety checks
 	var (
 		currentTPS       uint64
 		loadRatio        float64
@@ -855,12 +822,10 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 	h.stats.CPUUtilization = cpuUtil
 	h.stats.GPUUtilization = gpuUtil
 
-	// Update memory usage (simplified)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	h.stats.MemoryUsage = m.Alloc
 	memoryUsage = h.stats.MemoryUsage
-	// TODO: integrate GPU memory telemetry from GPU processor when available
 
 	currentTPS = h.stats.CurrentTPS
 	loadRatio = h.stats.LoadBalancingRatio
@@ -868,11 +833,11 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		throughputTarget = h.config.ThroughputTarget
 
 		if h.config.EnableGPU {
-			if cpuUtil > h.config.MaxCPUUtilization && gpuUtil < 0.5 && now.Sub(h.lastImbalanceWarning) > 5*time.Second {
+			if cpuUtil > h.config.MaxCPUUtilization && gpuUtil < 0.5 && now.Sub(h.lastImbalanceWarning) > h.logging.WarningCooldown {
 				shouldWarn = true
 				warnReason = "cpu_utilization_spike"
 				h.lastImbalanceWarning = now
-			} else if gpuUtil > h.config.MaxGPUUtilization && now.Sub(h.lastImbalanceWarning) > 5*time.Second {
+			} else if gpuUtil > h.config.MaxGPUUtilization && now.Sub(h.lastImbalanceWarning) > h.logging.WarningCooldown {
 				shouldWarn = true
 				warnReason = "gpu_saturated"
 				h.lastImbalanceWarning = now
@@ -880,14 +845,18 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		}
 	}
 
-	if now.Sub(h.lastMetricsLog) >= time.Second {
+	interval := h.logging.MetricsSampleInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if now.Sub(h.lastMetricsLog) >= interval {
 		shouldTrace = true
 		h.lastMetricsLog = now
 	}
 
 	h.mu.Unlock()
 
-	if shouldTrace {
+	if shouldTrace && h.debugLogsEnabled() {
 		log.Trace("Hybrid performance snapshot", "cpuUtil", cpuUtil, "gpuUtil", gpuUtil, "cpuLatency", avgCPULatency, "gpuLatency", avgGPULatency, "cpuActive", cpuRunning, "gpuQueue", gpuQueueSize, "currentTPS", currentTPS, "targetTPS", throughputTarget, "loadRatio", loadRatio, "memory", memoryUsage)
 	}
 
@@ -918,7 +887,6 @@ func (h *HybridProcessor) adjustLoadBalancing() {
 	h.loadBalancer.mu.Lock()
 	defer h.loadBalancer.mu.Unlock()
 
-	// Don't adjust too frequently
 	if time.Since(h.loadBalancer.lastAdjustment) < 10*time.Second {
 		return
 	}
@@ -927,30 +895,25 @@ func (h *HybridProcessor) adjustLoadBalancing() {
 	gpuUtil := h.loadBalancer.gpuUtilization
 	currentRatio := h.loadBalancer.adaptiveRatio
 
-	// Adjustment logic
 	newRatio := currentRatio
 
-	// If CPU is overloaded, shift more work to GPU
 	if cpuUtil > h.config.MaxCPUUtilization && gpuUtil < h.config.MaxGPUUtilization {
 		newRatio = min(1.0, currentRatio+0.1)
 	}
 
-	// If GPU is overloaded, shift more work to CPU
 	if gpuUtil > h.config.MaxGPUUtilization && cpuUtil < h.config.MaxCPUUtilization {
 		newRatio = max(0.0, currentRatio-0.1)
 	}
 
-	// If both are underutilized, prefer GPU for better throughput
 	if cpuUtil < 0.5 && gpuUtil < 0.5 && h.stats.CurrentTPS < h.config.ThroughputTarget {
 		newRatio = min(1.0, currentRatio+0.05)
 	}
 
-	// Apply adjustment
 	if newRatio != currentRatio {
 		h.loadBalancer.adaptiveRatio = newRatio
 		h.loadBalancer.lastAdjustment = time.Now()
 
-		log.Debug("Load balancing ratio adjusted",
+		h.logDebug("Load balancing ratio adjusted",
 			"oldRatio", currentRatio,
 			"newRatio", newRatio,
 			"cpuUtil", cpuUtil,
@@ -971,18 +934,13 @@ func (h *HybridProcessor) GetStats() HybridStats {
 func (h *HybridProcessor) Close() error {
 	log.Info("Shutting down hybrid processor...")
 
-	// Cancel context
 	h.cancel()
-
-	// Wait for background goroutines
 	h.wg.Wait()
 
-	// Close CPU processor
 	if h.cpuProcessor != nil {
 		h.cpuProcessor.Close()
 	}
 
-	// Close GPU processor
 	if h.gpuProcessor != nil {
 		h.gpuProcessor.Close()
 	}
@@ -991,7 +949,6 @@ func (h *HybridProcessor) Close() error {
 	return nil
 }
 
-// Helper functions
 func min(a, b float64) float64 {
 	if a < b {
 		return a
@@ -1006,7 +963,6 @@ func max(a, b float64) float64 {
 	return b
 }
 
-// Global hybrid processor instance
 var globalHybridProcessor *HybridProcessor
 
 // InitGlobalHybridProcessor initializes the global hybrid processor

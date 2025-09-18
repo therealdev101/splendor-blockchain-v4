@@ -516,23 +516,18 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 			PreferredGPUType: gpuType,
 			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
 			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
-		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 2000000),
-		GPUConfig: &gpu.GPUConfig{
-			PreferredGPUType: gpuType,
-			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
-			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
-=======
-		ThroughputTarget:      getEnvUint64("THROUGHPUT_TARGET", 2000000),
-		GPUConfig: &gpu.GPUConfig{
-			PreferredGPUType: gpuType,
-			MaxBatchSize:     getEnvInt("GPU_MAX_BATCH_SIZE", 800000),
-			MaxMemoryUsage:   getEnvUint64("GPU_MAX_MEMORY_USAGE", 19327352832), // 18GB blockchain allocation
->>>>>>> remotes/origin/codex/resolve-merge-conflicts-and-implement-plan
 			HashWorkers:      getEnvInt("GPU_HASH_WORKERS", 80),
 			SignatureWorkers: getEnvInt("GPU_SIGNATURE_WORKERS", 80),
 			TxWorkers:        getEnvInt("GPU_TX_WORKERS", 80),
 			EnablePipelining: getEnvBool("GPU_ENABLE_PIPELINING", true),
+		},
+		Logging: &hybrid.LoggingConfig{
+			EnableDebug:           getEnvBool("HYBRID_DEBUG_LOGS", true),
+			StrategyCooldown:      getEnvDurationSeconds("HYBRID_STRATEGY_LOG_COOLDOWN", 10*time.Second),
+			MetricsSampleInterval: getEnvDurationMS("HYBRID_METRICS_LOG_INTERVAL", time.Second),
+			WarningCooldown:       getEnvDurationSeconds("HYBRID_THROUGHPUT_WARNING_COOLDOWN", 5*time.Second),
+			SuccessCooldown:       getEnvDurationSeconds("HYBRID_THROUGHPUT_SUCCESS_COOLDOWN", 30*time.Second),
+			BatchLogInterval:      getEnvDurationSeconds("HYBRID_BATCH_LOG_INTERVAL", 2*time.Second),
 		},
 	}
 
