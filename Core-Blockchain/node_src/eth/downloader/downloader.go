@@ -1405,9 +1405,20 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 			}
 
 		case <-update:
-			// Short circuit if we lost all our peers
+			// Short circuit if we lost all our peers, but add retry logic for large blocks
 			if d.peers.Len() == 0 {
-				return errNoPeers
+				// For large blocks, wait a bit longer before giving up to allow peers to reconnect
+				log.Warn("No peers available for download, waiting for reconnection", "type", kind)
+				select {
+				case <-time.After(30 * time.Second): // Wait 30 seconds for peers to reconnect
+					if d.peers.Len() == 0 {
+						return errNoPeers
+					}
+					// Peers reconnected, continue
+					log.Info("Peers reconnected, resuming download", "type", kind, "peers", d.peers.Len())
+				case <-d.cancelCh:
+					return errCanceled
+				}
 			}
 			// Check for fetch request timeouts and demote the responsible peers
 			for pid, fails := range expire() {
@@ -1416,11 +1427,15 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 					// ourselves. Only reset to minimal throughput but don't drop just yet. If even the minimal times
 					// out that sync wise we need to get rid of the peer.
 					//
-					// The reason the minimum threshold is 2 is because the downloader tries to estimate the bandwidth
-					// and latency of a peer separately, which requires pushing the measures capacity a bit and seeing
-					// how response times reacts, to it always requests one more than the minimum (i.e. min 2).
-					if fails > 2 {
+					// The reason the minimum threshold is increased to 8 for large blocks (150k+ tx) is because
+					// large blocks take significantly longer to download and process, so we need to be more
+					// tolerant of timeouts before dropping peers.
+					if fails > 8 {
 						peer.log.Trace("Data delivery timed out", "type", kind)
+						setIdle(peer, 0, time.Now())
+					} else if fails > 4 {
+						// For large blocks, give peers more chances before dropping them
+						peer.log.Debug("Peer struggling with large blocks, reducing capacity", "type", kind, "fails", fails)
 						setIdle(peer, 0, time.Now())
 					} else {
 						peer.log.Debug("Stalling delivery, dropping", "type", kind)
@@ -1430,16 +1445,23 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 							// Timeouts can occur if e.g. compaction hits at the wrong time, and can be ignored
 							peer.log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", pid)
 						} else {
-							d.dropPeer(pid)
+							// Only drop peer if we have other peers available, otherwise keep trying
+							if d.peers.Len() > 1 {
+								d.dropPeer(pid)
 
-							// If this peer was the master peer, abort sync immediately
-							d.cancelLock.RLock()
-							master := pid == d.cancelPeer
-							d.cancelLock.RUnlock()
+								// If this peer was the master peer, abort sync immediately
+								d.cancelLock.RLock()
+								master := pid == d.cancelPeer
+								d.cancelLock.RUnlock()
 
-							if master {
-								d.cancel()
-								return errTimeout
+								if master {
+									d.cancel()
+									return errTimeout
+								}
+							} else {
+								// Last peer - don't drop it, just reset its capacity
+								peer.log.Warn("Last peer struggling with large blocks, keeping but resetting capacity", "type", kind)
+								setIdle(peer, 0, time.Now())
 							}
 						}
 					}
