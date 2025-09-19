@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	defaultMinSyncPeers = 5                // Amount of peers desired to start syncing
+	forceSyncCycle      = 5 * time.Second  // Reduced from 10s - faster sync recovery for high TPS
+	defaultMinSyncPeers = 2                // Reduced from 5 - more aggressive sync with fewer peers
 )
 
 // syncTransactions starts sending all currently pending transactions to the given peer.

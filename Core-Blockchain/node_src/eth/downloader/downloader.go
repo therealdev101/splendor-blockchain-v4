@@ -42,15 +42,15 @@ import (
 )
 
 var (
-	MaxBlockFetch   = 128 // Amount of blocks to be fetched per retrieval request
-	MaxHeaderFetch  = 192 // Amount of block headers to be fetched per retrieval request
-	MaxSkeletonSize = 128 // Number of header fetches to need for a skeleton assembly
-	MaxReceiptFetch = 256 // Amount of transaction receipts to allow fetching per request
-	MaxStateFetch   = 384 // Amount of node state values to allow fetching per request
+	MaxBlockFetch   = 256 // Increased from 128 - more blocks per request for high TPS
+	MaxHeaderFetch  = 384 // Increased from 192 - more headers per request for high TPS
+	MaxSkeletonSize = 256 // Increased from 128 - larger skeleton for high TPS
+	MaxReceiptFetch = 512 // Increased from 256 - more receipts per request for high TPS
+	MaxStateFetch   = 768 // Increased from 384 - more state values per request for high TPS
 
-	maxQueuedHeaders            = 32 * 1024                         // [eth/62] Maximum number of headers to queue for import (DOS protection)
-	maxHeadersProcess           = 2048                              // Number of header download results to import at once into the chain
-	maxResultsProcess           = 2048                              // Number of content download results to import at once into the chain
+	maxQueuedHeaders            = 128 * 1024                        // Increased from 32K - larger queue for high TPS
+	maxHeadersProcess           = 8192                              // Increased from 2048 - process more headers at once
+	maxResultsProcess           = 8192                              // Increased from 2048 - process more results at once
 	fullMaxForkAncestry  uint64 = params.FullImmutabilityThreshold  // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 	lightMaxForkAncestry uint64 = params.LightImmutabilityThreshold // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 
@@ -60,7 +60,7 @@ var (
 	fsHeaderCheckFrequency = 100             // Verification frequency of the downloaded headers during fast sync
 	fsHeaderSafetyNet      = 2048            // Number of headers to discard in case a chain violation is detected
 	fsHeaderForceVerify    = 24              // Number of headers to verify before and after the pivot to accept it
-	fsHeaderContCheck      = 3 * time.Second // Time interval to check for header continuations during state download
+	fsHeaderContCheck      = 1 * time.Second // Reduced from 3s - faster header continuation checks for high TPS
 	fsMinFullBlocks        = 64              // Number of blocks to retrieve fully even in fast sync
 )
 
