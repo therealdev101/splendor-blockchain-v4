@@ -490,14 +490,14 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 	}
 
 	log.Info("Initializing GPU acceleration from environment...")
-
+	
 	// Initialize comprehensive file logging system
 	logDir := "/root/blockchain-logs"
 	if err := logging.InitFileLogger(logDir); err != nil {
 		log.Warn("Failed to initialize file logging", "error", err, "logDir", logDir)
 	} else {
 		log.Info("File logging system initialized", "logDir", logDir)
-		logging.LogSystem("INFO", "BLOCKCHAIN NODE STARTUP",
+		logging.LogSystem("INFO", "BLOCKCHAIN NODE STARTUP", 
 			"nodeType", "geth",
 			"gpuEnabled", true,
 			"logDir", logDir,
@@ -519,7 +519,7 @@ func initializeGPUAcceleration(ctx *cli.Context) {
 	// Create hybrid processor configuration from environment
 	hybridConfig := &hybrid.HybridConfig{
 		EnableGPU:             true,
-		GPUThreshold:          getEnvInt("GPU_THRESHOLD", 384), // proactively activate GPU/hybrid once batches hit 384
+		GPUThreshold:          getEnvInt("GPU_THRESHOLD", 500), // default aligned with aggressive GPU plan
 		CPUGPURatio:           getEnvFloat("CPU_GPU_RATIO", 0.90),
 		AdaptiveLoadBalancing: getEnvBool("ADAPTIVE_LOAD_BALANCING", true),
 		PerformanceMonitoring: getEnvBool("PERFORMANCE_MONITORING", true),
