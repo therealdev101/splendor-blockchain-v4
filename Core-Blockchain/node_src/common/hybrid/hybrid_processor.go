@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/gpu"
-	"github.com/ethereum/go-ethereum/common/logging"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -27,7 +26,7 @@ type LoggingConfig struct {
 
 func defaultLoggingConfig() *LoggingConfig {
 	return &LoggingConfig{
-		EnableDebug:           true,
+		EnableDebug:           false,
 		StrategyCooldown:      10 * time.Second,
 		MetricsSampleInterval: time.Second,
 		WarningCooldown:       5 * time.Second,
@@ -171,6 +170,15 @@ type HybridStats struct {
 	GPUMemoryUsage     uint64        `json:"gpuMemoryUsage"`
 }
 
+// GPUStatus describes the availability of GPU acceleration from the hybrid processor.
+type GPUStatus struct {
+	ConfigEnabled     bool        `json:"configEnabled"`
+	Available         bool        `json:"available"`
+	Type              gpu.GPUType `json:"type"`
+	DeviceCount       int         `json:"deviceCount"`
+	UnavailableReason string      `json:"unavailableReason,omitempty"`
+}
+
 // NewHybridProcessor creates a new hybrid processor
 func NewHybridProcessor(config *HybridConfig) (*HybridProcessor, error) {
 	if config == nil {
@@ -265,7 +273,7 @@ func (p ProcessingStrategy) String() string {
 }
 
 func (h *HybridProcessor) debugLogsEnabled() bool {
-	return h.logging == nil || h.logging.EnableDebug
+	return h.logging != nil && h.logging.EnableDebug
 }
 
 func (h *HybridProcessor) logDebug(msg string, ctx ...interface{}) {
@@ -363,17 +371,7 @@ func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, ba
 			"gpuUtil", gpuUtil,
 			"adaptiveRatio", adaptiveRatio,
 		)
-		
-		// Log strategy changes to file
-		logging.LogHybrid("INFO", "HYBRID STRATEGY CHANGE",
-			"from", previousStrategy.String(),
-			"to", strategy.String(),
-			"reason", reason,
-			"batchSize", batchSize,
-			"cpuUtil", cpuUtil,
-			"gpuUtil", gpuUtil,
-			"adaptiveRatio", adaptiveRatio,
-		)
+
 	}
 
 	if !shouldLogDetail || !h.debugLogsEnabled() {
@@ -712,34 +710,10 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 
 	if shouldWarn {
 		log.Warn("Hybrid throughput below target", "strategy", strategy.String(), "tps", currentTPS, "target", h.config.ThroughputTarget, "avgLatency", avgLatency, "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "loadRatio", loadRatio)
-		
-		// Log performance warnings to file
-		logging.LogPerformance("WARN", "HYBRID THROUGHPUT BELOW TARGET", 
-			"strategy", strategy.String(),
-			"currentTPS", currentTPS,
-			"targetTPS", h.config.ThroughputTarget,
-			"avgLatency", avgLatency,
-			"cpuProcessed", cpuProcessed,
-			"gpuProcessed", gpuProcessed,
-			"duration", duration,
-			"loadRatio", loadRatio,
-		)
 	}
 
 	if shouldCheer {
 		log.Info("Hybrid throughput met target", "strategy", strategy.String(), "tps", currentTPS, "target", h.config.ThroughputTarget, "avgLatency", avgLatency, "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "loadRatio", loadRatio)
-		
-		// Log performance successes to file
-		logging.LogPerformance("INFO", "HYBRID THROUGHPUT TARGET ACHIEVED", 
-			"strategy", strategy.String(),
-			"currentTPS", currentTPS,
-			"targetTPS", h.config.ThroughputTarget,
-			"avgLatency", avgLatency,
-			"cpuProcessed", cpuProcessed,
-			"gpuProcessed", gpuProcessed,
-			"duration", duration,
-			"loadRatio", loadRatio,
-		)
 	}
 }
 
@@ -1019,6 +993,40 @@ func (h *HybridProcessor) GetStats() HybridStats {
 	defer h.mu.RUnlock()
 
 	return h.stats
+}
+
+// GetGPUStatus exposes the current GPU availability and configuration state.
+func (h *HybridProcessor) GetGPUStatus() GPUStatus {
+	status := GPUStatus{}
+
+	if h == nil {
+		status.UnavailableReason = "hybrid_processor_nil"
+		return status
+	}
+
+	if h.config != nil {
+		status.ConfigEnabled = h.config.EnableGPU
+	}
+
+	if !status.ConfigEnabled {
+		status.UnavailableReason = "disabled_in_config"
+		return status
+	}
+
+	if h.gpuProcessor == nil {
+		status.UnavailableReason = "not_initialized"
+		return status
+	}
+
+	status.Type = h.gpuProcessor.GetGPUType()
+	status.DeviceCount = h.gpuProcessor.GetDeviceCount()
+	status.Available = h.gpuProcessor.IsGPUAvailable() && status.DeviceCount > 0
+
+	if !status.Available {
+		status.UnavailableReason = "no_device_detected"
+	}
+
+	return status
 }
 
 // Close gracefully shuts down the hybrid processor

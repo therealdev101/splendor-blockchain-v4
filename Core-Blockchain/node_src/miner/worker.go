@@ -194,6 +194,8 @@ type worker struct {
 	lastBatchTime     time.Duration
 	lastDispatchTime  time.Duration
 	lastExecutorTime  time.Duration
+	lastGPUStatusLog  time.Time
+	gpuDiagnostics    bool
 	adaptiveBatching  bool
 	aiOptimization    bool
 
@@ -258,6 +260,18 @@ type worker struct {
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 }
 
+func (w *worker) gpuLogInfo(msg string, ctx ...interface{}) {
+	if w.gpuDiagnostics {
+		log.Info(msg, ctx...)
+	}
+}
+
+func (w *worker) gpuLogDebug(msg string, ctx ...interface{}) {
+	if w.gpuDiagnostics {
+		log.Debug(msg, ctx...)
+	}
+}
+
 func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(*types.Block) bool, init bool) *worker {
 	posa, isPoSA := engine.(consensus.PoSA)
 	worker := &worker{
@@ -289,14 +303,26 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		aiOptimization:     true,  // Enable AI-driven optimization
 	}
 
+	if config != nil {
+		worker.gpuDiagnostics = config.EnableGPUDiagnostics
+	}
+
 	// Initialize hybrid processor for GPU acceleration
 	hybridProcessor := hybrid.GetGlobalHybridProcessor()
 	if hybridProcessor != nil {
 		worker.hybridProcessor = hybridProcessor
-		// Check if GPU is enabled by looking at the hybrid processor's configuration
-		stats := hybridProcessor.GetStats()
-		worker.gpuEnabled = stats.GPUProcessed > 0 || stats.GPUUtilization >= 0
-		log.Info("Miner GPU acceleration initialized", "enabled", worker.gpuEnabled)
+		status := hybridProcessor.GetGPUStatus()
+		worker.gpuEnabled = status.ConfigEnabled && status.Available
+		log.Info("Miner GPU acceleration initialized",
+			"enabled", worker.gpuEnabled,
+			"configured", status.ConfigEnabled,
+			"available", status.Available,
+			"type", status.Type.String(),
+			"devices", status.DeviceCount,
+		)
+		if !worker.gpuEnabled && status.UnavailableReason != "" {
+			log.Warn("GPU acceleration inactive", "reason", status.UnavailableReason)
+		}
 	} else {
 		log.Info("Miner running in CPU-only mode")
 	}
@@ -314,7 +340,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// Initialize parallel state processor for advanced parallel processing
 	parallelConfig := core.DefaultParallelProcessorConfig()
 	// Optimize for i5-13500 (14 cores, 20 threads) + RTX 4000 SFF Ada
-    // Align with GPU-first plan while reserving capacity for MobileLLM-R1-950M
+	// Align with GPU-first plan while reserving capacity for MobileLLM-R1-950M
 	cpuCores := runtime.NumCPU()                           // 20 threads
 	parallelConfig.TxBatchSize = 100000                    // Match GPU-validated batches (100K transactions)
 	parallelConfig.MaxTxConcurrency = cpuCores * 12        // Use ~75% of CPU cores for blockchain execution
@@ -327,7 +353,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		"cpuCores", cpuCores,
 		"maxConcurrency", parallelConfig.MaxTxConcurrency,
 		"maxGoroutines", parallelConfig.MaxGoroutines,
-            "reservedForAI", "25% CPU + 2GB GPU for MobileLLM")
+		"reservedForAI", "25% CPU + 2GB GPU for MobileLLM")
 
 	var err error
 	worker.parallelProcessor, err = core.NewParallelStateProcessor(chainConfig, eth.BlockChain(), engine, parallelConfig)
@@ -1092,12 +1118,40 @@ func (w *worker) recordGPUExecutorDiagnostics(batchNumber int, applied int, disp
 	w.lastExecutorTime = executorTime
 	w.mu.Unlock()
 
-	log.Info("GPU batch CPU executor diagnostics",
+	w.gpuLogInfo("GPU batch CPU executor diagnostics",
 		"batchNumber", batchNumber,
 		"appliedTxs", applied,
 		"mainThreadDispatch", dispatchTime,
 		"executorRuntime", executorTime,
 		"mainThreadSavings", savings,
+	)
+}
+
+func (w *worker) maybeLogGPUInactive(reason string) {
+	const statusLogInterval = 10 * time.Second
+
+	now := time.Now()
+	w.mu.Lock()
+	if !w.lastGPUStatusLog.IsZero() && now.Sub(w.lastGPUStatusLog) < statusLogInterval {
+		w.mu.Unlock()
+		return
+	}
+	w.lastGPUStatusLog = now
+	w.mu.Unlock()
+
+	if w.hybridProcessor == nil {
+		log.Warn("GPU pipeline inactive", "reason", reason, "hybridProcessor", "nil")
+		return
+	}
+
+	status := w.hybridProcessor.GetGPUStatus()
+	log.Warn("GPU pipeline inactive",
+		"reason", reason,
+		"configured", status.ConfigEnabled,
+		"available", status.Available,
+		"type", status.Type.String(),
+		"devices", status.DeviceCount,
+		"detail", status.UnavailableReason,
 	)
 }
 
@@ -1125,7 +1179,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 		for {
 			// Check if we have enough gas and transactions for another GPU batch
 			if w.current.gasPool.Gas() < params.TxGas {
-				log.Debug("Insufficient gas for more GPU batches", "remaining", w.current.gasPool.Gas())
+				w.gpuLogDebug("Insufficient gas for more GPU batches", "remaining", w.current.gasPool.Gas())
 				break
 			}
 
@@ -1158,13 +1212,13 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 
 			// Break if we don't have enough transactions for a meaningful GPU batch
 			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
-				log.Debug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
+				w.gpuLogDebug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
 				break
 			}
 
 			// Process batch with GPU
 			batchStart := time.Now()
-			log.Info("Processing GPU batch", "batchNumber", batchNumber, "batchSize", len(txBatch), "totalProcessed", totalGPUProcessed)
+			w.gpuLogInfo("Processing GPU batch", "batchNumber", batchNumber, "batchSize", len(txBatch), "totalProcessed", totalGPUProcessed)
 
 			// Use hybrid processor for GPU-accelerated prevalidation
 			appliedCount := 0
@@ -1186,7 +1240,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				dispatchDuration := time.Since(callbackStart)
 
 				if len(validated) == 0 {
-					log.Debug("GPU batch returned no validated transactions", "batchNumber", batchNumber)
+					w.gpuLogDebug("GPU batch returned no validated transactions", "batchNumber", batchNumber)
 					return
 				}
 
@@ -1236,23 +1290,25 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			if appliedCount > 0 {
 				totalGPUProcessed += appliedCount
 				batchNumber++
-				log.Info("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "validated", appliedCount, "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
+				w.gpuLogInfo("GPU batch completed", "batchNumber", batchNumber-1, "batchSize", len(txBatch), "validated", appliedCount, "duration", batchDuration, "totalGPUProcessed", totalGPUProcessed)
 			} else {
-				log.Debug("GPU batch produced no applicable transactions", "batchNumber", batchNumber)
+				w.gpuLogDebug("GPU batch produced no applicable transactions", "batchNumber", batchNumber)
 				// GPU batch processing completed successfully
 				batchNumber++
 			}
 
 			// Check for interrupts between batches
 			if interrupt != nil && atomic.LoadInt32(interrupt) != commitInterruptNone {
-				log.Debug("GPU batch processing interrupted", "totalProcessed", totalGPUProcessed)
+				w.gpuLogDebug("GPU batch processing interrupted", "totalProcessed", totalGPUProcessed)
 				break
 			}
 		}
 
 		if totalGPUProcessed > 0 {
-			log.Info("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
+			w.gpuLogInfo("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
 		}
+	} else {
+		w.maybeLogGPUInactive("gpu_pipeline_disabled")
 	}
 
 	// Continue with sequential processing for remaining transactions
@@ -1715,7 +1771,7 @@ func (w *worker) updateBatchPerformance(batchSize int, duration time.Duration) {
 	// Log performance for monitoring
 	if duration > 0 {
 		tps := float64(batchSize) / duration.Seconds()
-		log.Debug("GPU batch performance",
+		w.gpuLogDebug("GPU batch performance",
 			"batchSize", batchSize,
 			"duration", duration,
 			"tps", tps,
@@ -1748,6 +1804,15 @@ func (w *worker) GetMinerStats() map[string]interface{} {
 			"cpu_utilization":      hybridStats.CPUUtilization,
 			"gpu_utilization":      hybridStats.GPUUtilization,
 			"load_balancing_ratio": hybridStats.LoadBalancingRatio,
+		}
+
+		gpuStatus := w.hybridProcessor.GetGPUStatus()
+		stats["gpu_status"] = map[string]interface{}{
+			"configured":         gpuStatus.ConfigEnabled,
+			"available":          gpuStatus.Available,
+			"type":               gpuStatus.Type.String(),
+			"device_count":       gpuStatus.DeviceCount,
+			"unavailable_reason": gpuStatus.UnavailableReason,
 		}
 	}
 
