@@ -120,7 +120,7 @@ func DefaultHybridConfig() *HybridConfig {
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
 		GPUThreshold:          500,
-		CPUGPURatio:           0.90,
+		CPUGPURatio:           1.0,  // 100% GPU by default for maximum acceleration
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
 		MaxCPUUtilization:     0.95,

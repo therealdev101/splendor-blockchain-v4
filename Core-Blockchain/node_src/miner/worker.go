@@ -284,7 +284,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
-		batchThreshold:     50000, // 50K threshold for GPU activation - 5x increase for 200K+ TPS
+		batchThreshold:     500,   // 500 threshold for GPU activation - realistic for normal operation
 		adaptiveBatching:   true,  // Enable adaptive batch sizing for 1M+ transactions
 		aiOptimization:     true,  // Enable AI-driven optimization
 	}
@@ -1157,7 +1157,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			}
 
 			// Break if we don't have enough transactions for a meaningful GPU batch
-			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
+			if len(txBatch) < w.batchThreshold/10 { // Minimum 50 transactions for GPU batch (500/10)
 				log.Debug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
 				break
 			}
