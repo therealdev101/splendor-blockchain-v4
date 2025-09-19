@@ -630,7 +630,7 @@ func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Hea
 	        panic (err)
 	    }
 
-		log.Info("FULL TRANSACTION OBJECT >>> " + string(out3))
+		// log.Info("FULL TRANSACTION OBJECT >>> " + string(out3)) // Commented out for high TPS performance
 
 
 	
@@ -786,7 +786,7 @@ func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header
 	        panic (err)
 	    }
 
-		log.Info("FULL TRANSACTION OBJECTS >>> " + string(out3))
+		// log.Info("FULL TRANSACTION OBJECTS >>> " + string(out3)) // Commented out for high TPS performance
 		
 	
 	if len(txs) > 0 {
