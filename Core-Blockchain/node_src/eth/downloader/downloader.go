@@ -42,11 +42,11 @@ import (
 )
 
 var (
-	MaxBlockFetch   = 64  // Reduced for large blocks - fewer blocks per request but larger individual blocks
-	MaxHeaderFetch  = 192 // Reduced for large blocks - fewer headers per request
-	MaxSkeletonSize = 128 // Reduced for large blocks - smaller skeleton for stability
-	MaxReceiptFetch = 128 // Reduced for large blocks - fewer receipts per request for 150k+ tx blocks
-	MaxStateFetch   = 384 // Reduced for large blocks - fewer state values per request
+	MaxBlockFetch   = 16  // Further reduced for very large blocks (180k+ tx) - much fewer blocks per request
+	MaxHeaderFetch  = 96  // Further reduced for very large blocks - fewer headers per request
+	MaxSkeletonSize = 64  // Further reduced for very large blocks - smaller skeleton for stability
+	MaxReceiptFetch = 32  // Further reduced for very large blocks - fewer receipts per request for 180k+ tx blocks
+	MaxStateFetch   = 192 // Further reduced for very large blocks - fewer state values per request
 
 	maxQueuedHeaders            = 64 * 1024                         // Reduced from 128K - smaller queue for large blocks
 	maxHeadersProcess           = 2048                              // Reduced from 8192 - process fewer headers at once for large blocks
@@ -1438,26 +1438,29 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 					// ourselves. Only reset to minimal throughput but don't drop just yet. If even the minimal times
 					// out that sync wise we need to get rid of the peer.
 					//
-					// The reason the minimum threshold is increased to 8 for large blocks (150k+ tx) is because
-					// large blocks take significantly longer to download and process, so we need to be more
+					// The reason the minimum threshold is increased to 20 for very large blocks (180k+ tx) is because
+					// very large blocks take significantly longer to download and process, so we need to be extremely
 					// tolerant of timeouts before dropping peers.
-					if fails > 8 {
-						peer.log.Trace("Data delivery timed out", "type", kind)
+					if fails > 20 {
+						peer.log.Trace("Data delivery timed out after many attempts", "type", kind, "fails", fails)
 						setIdle(peer, 0, time.Now())
-					} else if fails > 4 {
-						// For large blocks, give peers more chances before dropping them
-						peer.log.Debug("Peer struggling with large blocks, reducing capacity", "type", kind, "fails", fails)
+					} else if fails > 10 {
+						// For very large blocks, give peers many more chances before dropping them
+						peer.log.Debug("Peer struggling with very large blocks, reducing capacity", "type", kind, "fails", fails)
 						setIdle(peer, 0, time.Now())
 					} else {
-						peer.log.Debug("Stalling delivery, dropping", "type", kind)
-
+						// For very large blocks, be extremely conservative about dropping peers
+						peer.log.Debug("Peer having difficulty with large blocks, resetting capacity but keeping peer", "type", kind, "fails", fails)
+						
 						if d.dropPeer == nil {
 							// The dropPeer method is nil when `--copydb` is used for a local copy.
 							// Timeouts can occur if e.g. compaction hits at the wrong time, and can be ignored
 							peer.log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", pid)
 						} else {
-							// Only drop peer if we have other peers available, otherwise keep trying
-							if d.peers.Len() > 1 {
+							// For very large blocks, almost never drop peers - just reset capacity
+							// Only drop if we have many peers (5+) available
+							if d.peers.Len() > 5 {
+								peer.log.Debug("Many peers available, dropping struggling peer", "type", kind, "totalPeers", d.peers.Len())
 								d.dropPeer(pid)
 
 								// If this peer was the master peer, abort sync immediately
@@ -1470,8 +1473,8 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 									return errTimeout
 								}
 							} else {
-								// Last peer - don't drop it, just reset its capacity
-								peer.log.Warn("Last peer struggling with large blocks, keeping but resetting capacity", "type", kind)
+								// Few peers available - keep all peers, just reset capacity
+								peer.log.Warn("Few peers available, keeping struggling peer but resetting capacity", "type", kind, "totalPeers", d.peers.Len())
 								setIdle(peer, 0, time.Now())
 							}
 						}
