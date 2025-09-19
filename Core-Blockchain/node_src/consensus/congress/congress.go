@@ -625,12 +625,7 @@ func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Hea
 	var addr [] common.Address
 	var gass [] uint64
 
-		out3, err := json.Marshal(txs)
-	    if err != nil {
-	        panic (err)
-	    }
-
-		// log.Info("FULL TRANSACTION OBJECT >>> " + string(out3)) // Commented out for high TPS performance
+		// Removed out3 variable and logging for high TPS performance
 
 
 	
@@ -781,12 +776,7 @@ func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header
 	var gass [] uint64
 	//addr = new[len(txs)]
 	
-	    out3, err := json.Marshal(txs)
-	    if err != nil {
-	        panic (err)
-	    }
-
-		// log.Info("FULL TRANSACTION OBJECTS >>> " + string(out3)) // Commented out for high TPS performance
+		// Removed out3 variable and logging for high TPS performance
 		
 	
 	if len(txs) > 0 {
