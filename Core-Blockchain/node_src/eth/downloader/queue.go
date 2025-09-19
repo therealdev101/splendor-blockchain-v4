@@ -41,10 +41,10 @@ const (
 )
 
 var (
-	blockCacheMaxItems     = 8192              // Maximum number of blocks to cache before throttling the download
-	blockCacheInitialItems = 2048              // Initial number of blocks to start fetching, before we know the sizes of the blocks
-	blockCacheMemory       = 256 * 1024 * 1024 // Maximum amount of memory to use for block caching
-	blockCacheSizeWeight   = 0.1               // Multiplier to approximate the average block size based on past ones
+	blockCacheMaxItems     = 2048              // Reduced from 8192 - fewer blocks cached for large blocks (150k+ tx)
+	blockCacheInitialItems = 512               // Reduced from 2048 - fewer initial blocks for large blocks
+	blockCacheMemory       = 1024 * 1024 * 1024 // Increased from 256MB to 1GB - more memory for large blocks
+	blockCacheSizeWeight   = 0.3               // Increased from 0.1 - better size estimation for large blocks
 )
 
 var (

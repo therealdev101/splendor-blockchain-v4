@@ -42,26 +42,26 @@ import (
 )
 
 var (
-	MaxBlockFetch   = 256 // Increased from 128 - more blocks per request for high TPS
-	MaxHeaderFetch  = 384 // Increased from 192 - more headers per request for high TPS
-	MaxSkeletonSize = 256 // Increased from 128 - larger skeleton for high TPS
-	MaxReceiptFetch = 512 // Increased from 256 - more receipts per request for high TPS
-	MaxStateFetch   = 768 // Increased from 384 - more state values per request for high TPS
+	MaxBlockFetch   = 64  // Reduced for large blocks - fewer blocks per request but larger individual blocks
+	MaxHeaderFetch  = 192 // Reduced for large blocks - fewer headers per request
+	MaxSkeletonSize = 128 // Reduced for large blocks - smaller skeleton for stability
+	MaxReceiptFetch = 128 // Reduced for large blocks - fewer receipts per request for 150k+ tx blocks
+	MaxStateFetch   = 384 // Reduced for large blocks - fewer state values per request
 
-	maxQueuedHeaders            = 128 * 1024                        // Increased from 32K - larger queue for high TPS
-	maxHeadersProcess           = 8192                              // Increased from 2048 - process more headers at once
-	maxResultsProcess           = 8192                              // Increased from 2048 - process more results at once
+	maxQueuedHeaders            = 64 * 1024                         // Reduced from 128K - smaller queue for large blocks
+	maxHeadersProcess           = 2048                              // Reduced from 8192 - process fewer headers at once for large blocks
+	maxResultsProcess           = 1024                              // Reduced from 8192 - process fewer results at once for large blocks
 	fullMaxForkAncestry  uint64 = params.FullImmutabilityThreshold  // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 	lightMaxForkAncestry uint64 = params.LightImmutabilityThreshold // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 
 	reorgProtThreshold   = 48 // Threshold number of recent blocks to disable mini reorg protection
 	reorgProtHeaderDelay = 2  // Number of headers to delay delivering to cover mini reorgs
 
-	fsHeaderCheckFrequency = 100             // Verification frequency of the downloaded headers during fast sync
-	fsHeaderSafetyNet      = 2048            // Number of headers to discard in case a chain violation is detected
-	fsHeaderForceVerify    = 24              // Number of headers to verify before and after the pivot to accept it
-	fsHeaderContCheck      = 1 * time.Second // Reduced from 3s - faster header continuation checks for high TPS
-	fsMinFullBlocks        = 64              // Number of blocks to retrieve fully even in fast sync
+	fsHeaderCheckFrequency = 100              // Verification frequency of the downloaded headers during fast sync
+	fsHeaderSafetyNet      = 2048             // Number of headers to discard in case a chain violation is detected
+	fsHeaderForceVerify    = 24               // Number of headers to verify before and after the pivot to accept it
+	fsHeaderContCheck      = 5 * time.Second  // Increased from 1s - slower header continuation checks for large blocks
+	fsMinFullBlocks        = 64               // Number of blocks to retrieve fully even in fast sync
 )
 
 var (

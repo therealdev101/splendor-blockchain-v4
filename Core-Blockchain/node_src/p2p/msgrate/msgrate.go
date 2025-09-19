@@ -50,15 +50,16 @@ const qosTuningPeers = 5
 // rttMinEstimate is the minimal round trip time to target requests for. Since
 // every request entails a 2 way latency + bandwidth + serving database lookups,
 // it should be generous enough to permit meaningful work to be done on top of
-// the transmission costs.
-const rttMinEstimate = 2 * time.Second
+// the transmission costs. Increased for large blocks (150k+ tx).
+const rttMinEstimate = 10 * time.Second
 
 // rttMaxEstimate is the maximal round trip time to target requests for. Although
 // the expectation is that a well connected node will never reach this, certain
 // special connectivity ones might experience significant delays (e.g. satellite
 // uplink with 3s RTT). This value should be low enough to forbid stalling the
 // pipeline too long, but large enough to cover the worst of the worst links.
-const rttMaxEstimate = 20 * time.Second
+// Increased significantly for large blocks (150k+ tx).
+const rttMaxEstimate = 120 * time.Second
 
 // rttPushdownFactor is a multiplier to attempt forcing quicker requests than
 // what the message rate tracker estimates. The reason is that message rate
@@ -84,8 +85,8 @@ const ttlScaling = 3
 // ttlLimit is the maximum timeout allowance to prevent reaching crazy numbers
 // if some unforeseen network events shappen. As much as we try to hone in on
 // the most optimal values, it doesn't make any sense to go above a threshold,
-// even if everything is slow and screwy.
-const ttlLimit = time.Minute
+// even if everything is slow and screwy. Increased for large blocks (150k+ tx).
+const ttlLimit = 10 * time.Minute
 
 // tuningConfidenceCap is the number of active peers above which to stop detuning
 // the confidence number. The idea here is that once we hone in on the capacity
