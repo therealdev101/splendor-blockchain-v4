@@ -309,8 +309,10 @@ func geth(ctx *cli.Context) error {
 		return fmt.Errorf("invalid command: %q", args[0])
 	}
 
-	prepare(ctx)
-	stack, backend := makeFullNode(ctx)
+    prepare(ctx)
+    // Initialize GPU/Hybrid acceleration before building services so miners see it
+    initializeGPUAcceleration(ctx)
+    stack, backend := makeFullNode(ctx)
 	defer stack.Close()
 
 	startNode(ctx, stack, backend)
@@ -324,11 +326,8 @@ func geth(ctx *cli.Context) error {
 func startNode(ctx *cli.Context, stack *node.Node, backend ethapi.Backend) {
 	debug.Memsize.Add("node", stack)
 
-	// Start up the node itself
-	utils.StartNode(ctx, stack)
-
-	// Initialize GPU acceleration if enabled
-	initializeGPUAcceleration(ctx)
+    // Start up the node itself
+    utils.StartNode(ctx, stack)
 
 	// Unlock any account specifically requested
 	unlockAccounts(ctx, stack)
