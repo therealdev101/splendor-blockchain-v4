@@ -336,6 +336,12 @@ install_gpu_dependencies(){
   # Install GPU dependencies automatically for BOTH RPC and VALIDATOR TASK 6A
   log_wait "Installing complete GPU acceleration stack (NVIDIA drivers + CUDA + OpenCL)" && progress_bar
   
+  # Fix any broken package dependencies first
+  log_wait "Fixing package dependencies and conflicts"
+  apt --fix-broken install -y
+  apt autoremove -y
+  apt autoclean
+  
   # Update package lists
   apt update
   
@@ -350,18 +356,59 @@ install_gpu_dependencies(){
   else
     log_wait "Installing NVIDIA drivers for $GPU_ARCH architecture"
     
-    # Install appropriate NVIDIA drivers based on detected architecture
+    # Remove any conflicting packages first
+    apt remove --purge -y nvidia-* || true
+    apt autoremove -y
+    
+    # Install appropriate NVIDIA drivers with multiple fallback methods
+    DRIVER_INSTALLED=false
+    
     case $GPU_ARCH in
       "Ada Lovelace")
-        apt install -y nvidia-driver-575-open nvidia-utils-575 || apt install -y nvidia-driver-575 nvidia-utils-575
+        # Try multiple installation methods for RTX 4000 series
+        log_wait "Attempting RTX 4000 SFF Ada driver installation (method 1/4)"
+        if apt install -y nvidia-driver-575 nvidia-utils-575; then
+          DRIVER_INSTALLED=true
+        else
+          log_wait "Method 1 failed, trying open-source driver (method 2/4)"
+          if apt install -y nvidia-driver-575-open nvidia-utils-575; then
+            DRIVER_INSTALLED=true
+          else
+            log_wait "Method 2 failed, trying Ubuntu auto-detection (method 3/4)"
+            if ubuntu-drivers autoinstall; then
+              DRIVER_INSTALLED=true
+            else
+              log_wait "Method 3 failed, trying generic driver (method 4/4)"
+              apt install -y nvidia-driver-535 nvidia-utils-535 && DRIVER_INSTALLED=true
+            fi
+          fi
+        fi
         ;;
       "Ampere"|"Turing"|"Professional")
-        apt install -y nvidia-driver-535 nvidia-utils-535
+        log_wait "Installing drivers for $GPU_ARCH architecture"
+        if apt install -y nvidia-driver-535 nvidia-utils-535; then
+          DRIVER_INSTALLED=true
+        else
+          log_wait "Fallback: using Ubuntu auto-detection"
+          ubuntu-drivers autoinstall && DRIVER_INSTALLED=true
+        fi
         ;;
       *)
-        ubuntu-drivers autoinstall || apt install -y nvidia-driver-535 nvidia-utils-535
+        log_wait "Installing generic NVIDIA drivers"
+        if ubuntu-drivers autoinstall; then
+          DRIVER_INSTALLED=true
+        else
+          apt install -y nvidia-driver-535 nvidia-utils-535 && DRIVER_INSTALLED=true
+        fi
         ;;
     esac
+    
+    if [ "$DRIVER_INSTALLED" = false ]; then
+      log_error "All NVIDIA driver installation methods failed"
+      log_wait "Continuing with CPU-only mode - GPU will be disabled"
+    else
+      log_success "NVIDIA drivers installed successfully"
+    fi
   fi
   
   # Install OpenCL support FIRST (required for compilation)
