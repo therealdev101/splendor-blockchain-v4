@@ -1407,17 +1407,28 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 		case <-update:
 			// Short circuit if we lost all our peers, but add retry logic for large blocks
 			if d.peers.Len() == 0 {
-				// For large blocks, wait a bit longer before giving up to allow peers to reconnect
-				log.Warn("No peers available for download, waiting for reconnection", "type", kind)
-				select {
-				case <-time.After(30 * time.Second): // Wait 30 seconds for peers to reconnect
-					if d.peers.Len() == 0 {
-						return errNoPeers
+				// For large blocks, implement progressive retry with longer waits
+				retryCount := 0
+				maxRetries := 5
+				
+				for retryCount < maxRetries {
+					waitTime := time.Duration(30+retryCount*30) * time.Second // Progressive wait: 30s, 60s, 90s, 120s, 150s
+					log.Warn("No peers available for download, waiting for reconnection", "type", kind, "retry", retryCount+1, "maxRetries", maxRetries, "waitTime", waitTime)
+					
+					select {
+					case <-time.After(waitTime):
+						if d.peers.Len() > 0 {
+							log.Info("Peers reconnected, resuming download", "type", kind, "peers", d.peers.Len())
+							break // Exit retry loop and continue
+						}
+						retryCount++
+						if retryCount >= maxRetries {
+							log.Error("Max retries reached, no peers available", "type", kind)
+							return errNoPeers
+						}
+					case <-d.cancelCh:
+						return errCanceled
 					}
-					// Peers reconnected, continue
-					log.Info("Peers reconnected, resuming download", "type", kind, "peers", d.peers.Len())
-				case <-d.cancelCh:
-					return errCanceled
 				}
 			}
 			// Check for fetch request timeouts and demote the responsible peers
