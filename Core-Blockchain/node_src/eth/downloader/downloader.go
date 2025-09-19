@@ -117,6 +117,10 @@ type Downloader struct {
 	committed       int32
 	ancientLimit    uint64 // The maximum block number which can be regarded as ancient data.
 
+	// Retry tracking for large blocks
+	retryCounters map[string]int // Track retry attempts per download type
+	retryLock     sync.RWMutex   // Lock for retry counter access
+
 	// Channels
 	headerCh      chan dataPack        // Channel receiving inbound block headers
 	bodyCh        chan dataPack        // Channel receiving inbound block bodies
@@ -232,7 +236,8 @@ func New(checkpoint uint64, stateDb ethdb.Database, stateBloom *trie.SyncBloom, 
 		syncStatsState: stateSyncStats{
 			processed: rawdb.ReadFastTrieProgress(stateDb),
 		},
-		trackStateReq: make(chan *stateReq),
+		trackStateReq:  make(chan *stateReq),
+		retryCounters:  make(map[string]int),
 	}
 	go dl.stateFetcher()
 	return dl
@@ -1407,28 +1412,37 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 		case <-update:
 			// Short circuit if we lost all our peers, but add retry logic for large blocks
 			if d.peers.Len() == 0 {
-				// For large blocks, implement progressive retry with longer waits
-				retryCount := 0
+				// Get current retry count for this download type
+				d.retryLock.Lock()
+				retryCount := d.retryCounters[kind]
 				maxRetries := 5
 				
-				for retryCount < maxRetries {
-					waitTime := time.Duration(30+retryCount*30) * time.Second // Progressive wait: 30s, 60s, 90s, 120s, 150s
-					log.Warn("No peers available for download, waiting for reconnection", "type", kind, "retry", retryCount+1, "maxRetries", maxRetries, "waitTime", waitTime)
-					
-					select {
-					case <-time.After(waitTime):
-						if d.peers.Len() > 0 {
-							log.Info("Peers reconnected, resuming download", "type", kind, "peers", d.peers.Len())
-							break // Exit retry loop and continue
-						}
-						retryCount++
-						if retryCount >= maxRetries {
-							log.Error("Max retries reached, no peers available", "type", kind)
-							return errNoPeers
-						}
-					case <-d.cancelCh:
-						return errCanceled
+				if retryCount >= maxRetries {
+					d.retryLock.Unlock()
+					log.Error("Max retries reached, no peers available", "type", kind, "totalRetries", retryCount)
+					return errNoPeers
+				}
+				
+				// Increment retry count
+				d.retryCounters[kind] = retryCount + 1
+				currentRetry := d.retryCounters[kind]
+				d.retryLock.Unlock()
+				
+				waitTime := time.Duration(30+retryCount*30) * time.Second // Progressive wait: 30s, 60s, 90s, 120s, 150s
+				log.Warn("No peers available for download, waiting for reconnection", "type", kind, "retry", currentRetry, "maxRetries", maxRetries, "waitTime", waitTime)
+				
+				select {
+				case <-time.After(waitTime):
+					if d.peers.Len() > 0 {
+						// Reset retry counter on successful reconnection
+						d.retryLock.Lock()
+						d.retryCounters[kind] = 0
+						d.retryLock.Unlock()
+						log.Info("Peers reconnected, resuming download", "type", kind, "peers", d.peers.Len())
 					}
+					// Continue regardless - either with peers or to retry again
+				case <-d.cancelCh:
+					return errCanceled
 				}
 			}
 			// Check for fetch request timeouts and demote the responsible peers
