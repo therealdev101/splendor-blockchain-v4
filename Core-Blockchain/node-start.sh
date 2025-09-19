@@ -230,6 +230,35 @@ initializeGPU(){
     
     if [ "$CUDA_AVAILABLE" = "true" ]; then
       echo -e "${GREEN}✅ CUDA toolkit available and ready${NC}"
+      
+      # Build GPU kernels if needed
+      if [ ! -f "./node_src/common/gpu/libcuda_kernels.so" ] || [ ! -f "./node_src/common/gpu/libopencl_kernels.so" ]; then
+        echo -e "${CYAN}Building GPU kernels...${NC}"
+        cd ./node_src
+        if make -f Makefile.gpu clean && make -f Makefile.gpu cuda && make -f Makefile.gpu opencl; then
+          echo -e "${GREEN}✅ GPU kernels built successfully${NC}"
+        else
+          echo -e "${ORANGE}⚠️  GPU kernel build failed - using CPU fallback${NC}"
+        fi
+        cd ..
+      else
+        echo -e "${GREEN}✅ GPU kernels already built${NC}"
+      fi
+      
+      # Build GPU-enabled geth if needed
+      if [ ! -f "./node_src/build/bin/geth" ] || ! ldd ./node_src/build/bin/geth | grep -q cuda; then
+        echo -e "${CYAN}Building Geth with GPU support...${NC}"
+        cd ./node_src
+        if make -f Makefile.cuda geth-cuda; then
+          echo -e "${GREEN}✅ Geth built with GPU support${NC}"
+        else
+          echo -e "${ORANGE}⚠️  GPU-enabled Geth build failed - using standard build${NC}"
+        fi
+        cd ..
+      else
+        echo -e "${GREEN}✅ GPU-enabled Geth already built${NC}"
+      fi
+      
       # Verify CUDA can detect GPU
       if timeout 5 nvidia-smi >/dev/null 2>&1; then
         echo -e "${GREEN}✅ CUDA-GPU communication verified${NC}"
@@ -255,48 +284,56 @@ finalize(){
   # Initialize AI status tracking
   AI_STATUS="not_available"
   
-  # Start vLLM AI service directly
-  if [ -d "/opt/vllm-env" ]; then
-    echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
-    log_wait "Starting vLLM MobileLLM-R1-950M AI load balancer"
-    
-    # Check if vLLM is already running
-    if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
-      log_success "vLLM AI service already running"
-      AI_STATUS="fully_active"
+  # Start vLLM AI service with automatic installation
+  echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
+  
+  # Check if vLLM is already running
+  if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+    log_success "vLLM AI service already running"
+    AI_STATUS="fully_active"
+  else
+    # Check if vLLM is installed
+    if python3 -c "import vllm" 2>/dev/null; then
+      log_success "vLLM already installed"
     else
-      # Start vLLM in background with working parameters
-      cd /opt
-      source vllm-env/bin/activate
+      log_wait "Installing vLLM for AI load balancing"
+      if pip3 install vllm; then
+        log_success "vLLM installed successfully"
+      else
+        echo -e "${ORANGE}⚠️  vLLM installation failed - continuing without AI${NC}"
+        AI_STATUS="install_failed"
+      fi
+    fi
+    
+    # Start vLLM if installation succeeded
+    if [ "$AI_STATUS" != "install_failed" ]; then
+      log_wait "Starting vLLM MobileLLM-R1-950M AI load balancer"
       
-      # Start vLLM with reduced memory usage and proper configuration
-      nohup python -m vllm.entrypoints.openai.api_server \
+      # Start vLLM with optimized parameters for blockchain
+      nohup python3 -m vllm.entrypoints.openai.api_server \
         --model facebook/MobileLLM-R1-950M \
         --host 0.0.0.0 \
         --port 8000 \
         --gpu-memory-utilization 0.1 \
-        --max-model-len 2048 \
-        --dtype float16 \
+        --max-model-len 4096 \
         --disable-log-requests \
         > /tmp/vllm.log 2>&1 &
       
       VLLM_PID=$!
       echo $VLLM_PID > /tmp/vllm.pid
       
-      cd /root/splendor-blockchain-v4/Core-Blockchain/
-      
       log_success "vLLM AI service started (PID: $VLLM_PID)"
       AI_STATUS="service_started"
       
       # Wait for API to be ready (non-blocking)
-      for i in {1..15}; do
+      for i in {1..30}; do
         if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
           log_success "vLLM API ready - AI load balancing active"
           AI_STATUS="fully_active"
           break
         fi
-        echo -e "${CYAN}Waiting for vLLM API... ($i/15)${NC}"
-        sleep 3
+        echo -e "${CYAN}Waiting for vLLM API... ($i/30)${NC}"
+        sleep 2
       done
       
       # If API didn't respond but service started, it's still starting up
@@ -305,9 +342,6 @@ finalize(){
         log_wait "vLLM API still initializing (check /tmp/vllm.log for progress)"
       fi
     fi
-  else
-    echo -e "\n${ORANGE}vLLM environment not found. Run setup-ai-llm.sh to install AI features.${NC}"
-    AI_STATUS="not_installed"
   fi
   
   if [ "$isRPC" = true ]; then

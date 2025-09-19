@@ -32,12 +32,8 @@ int cuda_process_hashes(void* hashes, int count, void* results);
 int cuda_verify_signatures(void* sigs, void* msgs, void* keys, int count, void* results);
 void cuda_cleanup();
 
-// CUDA function declarations (stubs for now - can be replaced with real implementations)
-int initCUDA();
-int processTxBatchCUDA(void* txData, int txCount, void* results);
-int processHashesCUDA(void* hashes, int count, void* results);
-int verifySignaturesCUDA(void* signatures, int count, void* results);
-void cleanupCUDA();
+// CUDA function declarations (implemented in cuda_kernels.cu)
+// Note: Using real CUDA functions from cuda_kernels.cu
 
 // OpenCL function declarations (implemented in opencl_kernels.c)
 int initOpenCL();
@@ -46,28 +42,6 @@ int processTxBatchOpenCLFull(void* txData, void* txLens, void* stateData, void* 
 int processHashesOpenCL(void* hashes, int count, void* results);
 int verifySignaturesOpenCL(void* signatures, int count, void* results);
 void cleanupOpenCL();
-
-// Working stub implementations for CUDA (can be replaced when CUDA is properly configured)
-int initCUDA() { 
-    // Return -1 to indicate CUDA not available, system will fall back to OpenCL or CPU
-    return -1; 
-}
-
-int processHashesCUDA(void* hashes, int count, void* results) { 
-    return -1; // Not implemented, will fall back to OpenCL or CPU
-}
-
-int verifySignaturesCUDA(void* signatures, int count, void* results) {
-    return -1; // Not implemented, will fall back to OpenCL or CPU
-}
-
-int processTxBatchCUDA(void* txData, int txCount, void* results) { 
-    return -1; // Not implemented, will fall back to OpenCL or CPU
-}
-
-void cleanupCUDA() { 
-    // No-op for stub implementation
-}
 */
 import "C"
 

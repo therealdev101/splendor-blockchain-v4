@@ -168,8 +168,10 @@ task6(){
   # Build GPU libraries using Makefile.gpu - this creates the .so files that CGO needs
   if make -f Makefile.gpu all 2>/dev/null; then
     log_success "GPU libraries (.so files) built successfully"
+    GPU_LIBS_BUILT=true
   else
     log_wait "GPU libraries not available, creating stub libraries for compilation"
+    GPU_LIBS_BUILT=false
     # Create minimal stub libraries OUTSIDE the Go package so cgo won't compile them
     STUBDIR=$(mktemp -d)
     cat > "$STUBDIR/cuda_stub.c" <<'EOF'
@@ -213,6 +215,16 @@ EOF
   else
     log_wait "GPU libraries missing, building CPU-only version"
     make all
+  fi
+  
+  # If GPU libraries were built successfully, rebuild with CUDA support for maximum performance
+  if [ "$GPU_LIBS_BUILT" = true ] && command -v nvcc >/dev/null 2>&1; then
+    log_wait "Rebuilding with full CUDA acceleration support"
+    if make -f Makefile.cuda geth-cuda; then
+      log_success "Geth rebuilt with full CUDA acceleration"
+    else
+      log_wait "CUDA build will complete after reboot (driver activation required)"
+    fi
   fi
   
   log_success "Backend build completed"
