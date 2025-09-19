@@ -103,7 +103,8 @@ type HybridConfig struct {
 	CPUConfig *gopool.ProcessorConfig `json:"cpuConfig"`
 	GPUConfig *gpu.GPUConfig          `json:"gpuConfig"`
 
-	EnableGPU             bool    `json:"enableGpu"`
+	EnableGPU bool `json:"enableGpu"`
+	// GPUThreshold defines the batch size that proactively activates GPU or hybrid processing paths.
 	GPUThreshold          int     `json:"gpuThreshold"`
 	CPUGPURatio           float64 `json:"cpuGpuRatio"`
 	AdaptiveLoadBalancing bool    `json:"adaptiveLoadBalancing"`
@@ -127,7 +128,7 @@ func DefaultHybridConfig() *HybridConfig {
 		CPUConfig:             gopool.DefaultProcessorConfig(),
 		GPUConfig:             gpu.DefaultGPUConfig(),
 		EnableGPU:             true,
-		GPUThreshold:          500,
+		GPUThreshold:          384, // proactively push >=384 tx batches to GPU/hybrid path
 		CPUGPURatio:           0.90,
 		AdaptiveLoadBalancing: true,
 		PerformanceMonitoring: true,
@@ -153,6 +154,7 @@ type LoadBalancer struct {
 	adaptiveRatio      float64
 	lastAdjustment     time.Time
 	performanceHistory []PerformanceSnapshot
+	gpuQueueDepth      int
 }
 
 // PerformanceSnapshot captures performance metrics at a point in time
@@ -296,7 +298,7 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 	strategy := ProcessingStrategyCPUOnly
 	reason := "gpu_unavailable"
 
-	if !h.config.EnableGPU || h.gpuProcessor == nil {
+	if h.config == nil || !h.config.EnableGPU || h.gpuProcessor == nil {
 		h.recordStrategyDecision(strategy, batchSize, reason, 0, 0, 0)
 		return strategy, reason
 	}
@@ -307,40 +309,92 @@ func (h *HybridProcessor) determineProcessingStrategy(batchSize int) (Processing
 		return strategy, reason
 	}
 
-	h.loadBalancer.mu.RLock()
-	cpuUtil := h.loadBalancer.cpuUtilization
-	gpuUtil := h.loadBalancer.gpuUtilization
-	adaptiveRatio := h.loadBalancer.adaptiveRatio
-	h.loadBalancer.mu.RUnlock()
+	var (
+		cpuUtil       float64
+		gpuUtil       float64
+		adaptiveRatio float64
+		gpuQueueDepth int
+	)
 
-	if cpuUtil > h.config.MaxCPUUtilization {
-		if gpuUtil < h.config.MaxGPUUtilization {
-			strategy = ProcessingStrategyGPUOnly
-			reason = "cpu_overloaded"
+	if h.loadBalancer != nil {
+		h.loadBalancer.mu.RLock()
+		cpuUtil = h.loadBalancer.cpuUtilization
+		gpuUtil = h.loadBalancer.gpuUtilization
+		adaptiveRatio = h.loadBalancer.adaptiveRatio
+		gpuQueueDepth = h.loadBalancer.gpuQueueDepth
+		h.loadBalancer.mu.RUnlock()
+	}
+
+	var (
+		currentTPS       uint64
+		throughputTarget uint64
+	)
+
+	h.mu.RLock()
+	currentTPS = h.stats.CurrentTPS
+	h.mu.RUnlock()
+
+	throughputTarget = h.config.ThroughputTarget
+
+	queueThreshold := 5
+	if h.config.GPUConfig != nil && h.config.GPUConfig.TxWorkers > 0 {
+		queueThreshold = h.config.GPUConfig.TxWorkers / 4
+		if queueThreshold < 5 {
+			queueThreshold = 5
+		}
+	}
+	lowQueueThreshold := queueThreshold / 2
+	if lowQueueThreshold < 1 {
+		lowQueueThreshold = 1
+	}
+
+	highQueue := gpuQueueDepth >= queueThreshold
+	lowQueue := gpuQueueDepth <= lowQueueThreshold
+	throughputShortfall := throughputTarget > 0 && currentTPS < throughputTarget
+
+	strategy = ProcessingStrategyGPUOnly
+	reason = "batch_meets_gpu_threshold"
+
+	maxGPUUtil := h.config.MaxGPUUtilization
+	if maxGPUUtil <= 0 {
+		maxGPUUtil = 0.98
+	}
+
+	maxCPUUtil := h.config.MaxCPUUtilization
+	if maxCPUUtil <= 0 {
+		maxCPUUtil = 0.95
+	}
+
+	switch {
+	case cpuUtil > maxCPUUtil:
+		if gpuUtil < maxGPUUtil && !highQueue {
+			reason = "cpu_overloaded_preferring_gpu"
 		} else {
 			strategy = ProcessingStrategyHybrid
 			reason = "cpu_hot_gpu_hot"
 		}
-		h.recordStrategyDecision(strategy, batchSize, reason, cpuUtil, gpuUtil, adaptiveRatio)
-		return strategy, reason
-	}
-
-	if batchSize > h.config.GPUThreshold*2 && gpuUtil < 0.5 {
+	case gpuUtil >= maxGPUUtil:
 		strategy = ProcessingStrategyHybrid
-		reason = "large_batch_low_gpu_utilization"
-		h.recordStrategyDecision(strategy, batchSize, reason, cpuUtil, gpuUtil, adaptiveRatio)
-		return strategy, reason
+		reason = "gpu_hot"
+	case highQueue:
+		strategy = ProcessingStrategyHybrid
+		reason = "gpu_queue_backlog"
+	case throughputShortfall:
+		if gpuUtil < 0.5 && !highQueue {
+			reason = "throughput_shortfall_gpu_only"
+		} else {
+			strategy = ProcessingStrategyHybrid
+			reason = "throughput_shortfall_need_cpu"
+		}
+	case gpuUtil < 0.3 && lowQueue:
+		reason = "gpu_underutilized"
+	case cpuUtil >= maxCPUUtil*0.85:
+		strategy = ProcessingStrategyHybrid
+		reason = "proactive_hybrid_balancing"
 	}
 
-	if batchSize > h.config.GPUThreshold*5 {
-		strategy = ProcessingStrategyGPUOnly
-		reason = "very_large_batch"
-		h.recordStrategyDecision(strategy, batchSize, reason, cpuUtil, gpuUtil, adaptiveRatio)
-		return strategy, reason
-	}
-
-	h.recordStrategyDecision(strategy, batchSize, "default_cpu_path", cpuUtil, gpuUtil, adaptiveRatio)
-	return ProcessingStrategyCPUOnly, "default_cpu_path"
+	h.recordStrategyDecision(strategy, batchSize, reason, cpuUtil, gpuUtil, adaptiveRatio)
+	return strategy, reason
 }
 
 func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, batchSize int, reason string, cpuUtil, gpuUtil, adaptiveRatio float64) {
@@ -811,6 +865,7 @@ func (h *HybridProcessor) collectPerformanceMetrics() {
 		h.loadBalancer.gpuUtilization = gpuUtil
 		h.loadBalancer.avgCPULatency = avgCPULatency
 		h.loadBalancer.avgGPULatency = avgGPULatency
+		h.loadBalancer.gpuQueueDepth = gpuQueueSize
 
 		snapshot := PerformanceSnapshot{
 			Timestamp:     time.Now(),
