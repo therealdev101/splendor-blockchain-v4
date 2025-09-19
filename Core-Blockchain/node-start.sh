@@ -284,7 +284,7 @@ finalize(){
   # Initialize AI status tracking
   AI_STATUS="not_available"
   
-  # Start vLLM AI service with automatic installation
+  # Start vLLM AI service with proper virtual environment handling
   echo -e "\n${GREEN}+------------------ Starting AI System -------------------+${NC}"
   
   # Check if vLLM is already running
@@ -292,25 +292,47 @@ finalize(){
     log_success "vLLM AI service already running"
     AI_STATUS="fully_active"
   else
-    # Check if vLLM is installed
-    if python3 -c "import vllm" 2>/dev/null; then
-      log_success "vLLM already installed"
+    # Check if vLLM virtual environment exists
+    if [ -d "/opt/vllm-env" ]; then
+      log_success "vLLM virtual environment found"
+      
+      # Check if vLLM is installed in the virtual environment
+      if /opt/vllm-env/bin/python -c "import vllm" 2>/dev/null; then
+        log_success "vLLM already installed in virtual environment"
+      else
+        log_wait "Installing vLLM in virtual environment"
+        source /opt/vllm-env/bin/activate
+        if pip install vllm transformers huggingface_hub fastapi uvicorn; then
+          log_success "vLLM installed successfully in virtual environment"
+        else
+          echo -e "${ORANGE}⚠️  vLLM installation failed - continuing without AI${NC}"
+          AI_STATUS="install_failed"
+        fi
+        deactivate
+      fi
     else
-      log_wait "Installing vLLM for AI load balancing"
-      if pip3 install vllm; then
-        log_success "vLLM installed successfully"
+      # Create virtual environment and install vLLM
+      log_wait "Creating vLLM virtual environment"
+      python3 -m venv /opt/vllm-env
+      source /opt/vllm-env/bin/activate
+      
+      log_wait "Installing vLLM in virtual environment"
+      pip install --upgrade pip setuptools wheel
+      if pip install vllm transformers huggingface_hub fastapi uvicorn; then
+        log_success "vLLM installed successfully in virtual environment"
       else
         echo -e "${ORANGE}⚠️  vLLM installation failed - continuing without AI${NC}"
         AI_STATUS="install_failed"
       fi
+      deactivate
     fi
     
     # Start vLLM if installation succeeded
     if [ "$AI_STATUS" != "install_failed" ]; then
       log_wait "Starting vLLM MobileLLM-R1-950M AI load balancer"
       
-      # Start vLLM with optimized parameters for blockchain
-      nohup python3 -m vllm.entrypoints.openai.api_server \
+      # Start vLLM using the virtual environment
+      nohup /opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \
         --model facebook/MobileLLM-R1-950M \
         --host 0.0.0.0 \
         --port 8000 \
