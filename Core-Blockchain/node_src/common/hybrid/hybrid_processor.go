@@ -374,6 +374,29 @@ func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, ba
 
 	}
 
+	if shouldLogDetail {
+		switch reason {
+		case "gpu_unavailable":
+			status := h.GetGPUStatus()
+			log.Warn("GPU acceleration unavailable",
+				"configured", status.ConfigEnabled,
+				"available", status.Available,
+				"type", status.Type.String(),
+				"devices", status.DeviceCount,
+				"detail", status.UnavailableReason,
+			)
+		case "batch_below_gpu_threshold":
+			threshold := 0
+			if h.config != nil {
+				threshold = h.config.GPUThreshold
+			}
+			log.Info("GPU batch skipped below threshold",
+				"batchSize", batchSize,
+				"threshold", threshold,
+			)
+		}
+	}
+
 	if !shouldLogDetail || !h.debugLogsEnabled() {
 		return
 	}

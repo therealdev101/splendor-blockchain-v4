@@ -1180,6 +1180,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			// Check if we have enough gas and transactions for another GPU batch
 			if w.current.gasPool.Gas() < params.TxGas {
 				w.gpuLogDebug("Insufficient gas for more GPU batches", "remaining", w.current.gasPool.Gas())
+				w.maybeLogGPUInactive("gpu_insufficient_gas")
 				break
 			}
 
@@ -1213,6 +1214,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			// Break if we don't have enough transactions for a meaningful GPU batch
 			if len(txBatch) < w.batchThreshold/10 { // Minimum 5K transactions for GPU batch (50K/10)
 				w.gpuLogDebug("Insufficient transactions for GPU batch", "available", len(txBatch), "minimum", w.batchThreshold/10)
+				w.maybeLogGPUInactive("gpu_batch_too_small")
 				break
 			}
 
@@ -1227,6 +1229,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				if err != nil {
 					batchApplyErr = err
 					log.Warn("GPU batch processing failed, falling back to sequential", "batchNumber", batchNumber, "error", err)
+					w.maybeLogGPUInactive("hybrid_batch_error")
 					return
 				}
 
@@ -1265,6 +1268,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 				if applyErr != nil {
 					batchApplyErr = applyErr
 					log.Warn("Parallel executor failed to apply GPU validated transactions", "batchNumber", batchNumber, "error", applyErr, "dispatchTime", dispatchDuration, "executorTime", executorTime)
+					w.maybeLogGPUInactive("gpu_apply_error")
 					return
 				}
 
@@ -1281,10 +1285,12 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 
 			if err != nil {
 				log.Warn("Failed to submit GPU batch, falling back to sequential processing", "batchNumber", batchNumber, "error", err)
+				w.maybeLogGPUInactive("hybrid_submission_error")
 				break
 			}
 			if batchApplyErr != nil {
 				log.Warn("GPU batch application failed, aborting GPU pipeline", "batchNumber", batchNumber, "error", batchApplyErr)
+				w.maybeLogGPUInactive("gpu_batch_application_failed")
 				break
 			}
 			if appliedCount > 0 {
@@ -1306,6 +1312,8 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 
 		if totalGPUProcessed > 0 {
 			w.gpuLogInfo("Multi-batch GPU processing completed", "totalBatches", batchNumber-1, "totalGPUProcessed", totalGPUProcessed)
+		} else {
+			w.maybeLogGPUInactive("gpu_no_batches_processed")
 		}
 	} else {
 		w.maybeLogGPUInactive("gpu_pipeline_disabled")
