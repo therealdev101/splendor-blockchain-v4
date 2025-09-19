@@ -10,10 +10,18 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/gpu"
-	"github.com/ethereum/go-ethereum/common/logging"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 )
+
+type noopLogger struct{}
+
+func (noopLogger) Trace(string, ...interface{}) {}
+func (noopLogger) Debug(string, ...interface{}) {}
+func (noopLogger) Info(string, ...interface{})  {}
+func (noopLogger) Warn(string, ...interface{})  {}
+func (noopLogger) Error(string, ...interface{}) {}
+
+var log = noopLogger{}
 
 // LoggingConfig controls how hybrid processor events are emitted.
 type LoggingConfig struct {
@@ -373,16 +381,6 @@ func (h *HybridProcessor) recordStrategyDecision(strategy ProcessingStrategy, ba
 			"adaptiveRatio", adaptiveRatio,
 		)
 
-		// Log strategy changes to file
-		logging.LogHybrid("INFO", "HYBRID STRATEGY CHANGE",
-			"from", previousStrategy.String(),
-			"to", strategy.String(),
-			"reason", reason,
-			"batchSize", batchSize,
-			"cpuUtil", cpuUtil,
-			"gpuUtil", gpuUtil,
-			"adaptiveRatio", adaptiveRatio,
-		)
 	}
 
 	if !shouldLogDetail || !h.debugLogsEnabled() {
@@ -722,33 +720,11 @@ func (h *HybridProcessor) updateStats(cpuProcessed, gpuProcessed uint64, duratio
 	if shouldWarn {
 		log.Warn("Hybrid throughput below target", "strategy", strategy.String(), "tps", currentTPS, "target", h.config.ThroughputTarget, "avgLatency", avgLatency, "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "loadRatio", loadRatio)
 
-		// Log performance warnings to file
-		logging.LogPerformance("WARN", "HYBRID THROUGHPUT BELOW TARGET",
-			"strategy", strategy.String(),
-			"currentTPS", currentTPS,
-			"targetTPS", h.config.ThroughputTarget,
-			"avgLatency", avgLatency,
-			"cpuProcessed", cpuProcessed,
-			"gpuProcessed", gpuProcessed,
-			"duration", duration,
-			"loadRatio", loadRatio,
-		)
 	}
 
 	if shouldCheer {
 		log.Info("Hybrid throughput met target", "strategy", strategy.String(), "tps", currentTPS, "target", h.config.ThroughputTarget, "avgLatency", avgLatency, "cpuProcessed", cpuProcessed, "gpuProcessed", gpuProcessed, "duration", duration, "loadRatio", loadRatio)
 
-		// Log performance successes to file
-		logging.LogPerformance("INFO", "HYBRID THROUGHPUT TARGET ACHIEVED",
-			"strategy", strategy.String(),
-			"currentTPS", currentTPS,
-			"targetTPS", h.config.ThroughputTarget,
-			"avgLatency", avgLatency,
-			"cpuProcessed", cpuProcessed,
-			"gpuProcessed", gpuProcessed,
-			"duration", duration,
-			"loadRatio", loadRatio,
-		)
 	}
 }
 

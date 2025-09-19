@@ -11,10 +11,8 @@ import (
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/logging"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 /*
@@ -70,6 +68,16 @@ void cleanupCUDA() {
 }
 */
 import "C"
+
+type noopLogger struct{}
+
+func (noopLogger) Trace(string, ...interface{}) {}
+func (noopLogger) Debug(string, ...interface{}) {}
+func (noopLogger) Info(string, ...interface{})  {}
+func (noopLogger) Warn(string, ...interface{})  {}
+func (noopLogger) Error(string, ...interface{}) {}
+
+var log = noopLogger{}
 
 // GPUType represents the type of GPU acceleration
 type GPUType int
@@ -970,13 +978,6 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"deviceCount", p.deviceCount,
 	)
 
-	// Save to GPU log file
-	logging.LogGPU("INFO", "GPU TRANSACTION PROCESSING ACTIVATED",
-		"batchSize", len(batch.Transactions),
-		"gpuType", p.gpuType,
-		"deviceCount", p.deviceCount,
-	)
-
 	log.Debug("Starting enhanced GPU transaction processing",
 		"batchSize", len(batch.Transactions),
 		"gpuType", p.gpuType,
@@ -1226,38 +1227,6 @@ func (p *GPUProcessor) processTransactionsGPU(batch *TransactionBatch) {
 		"cpuSigVerifyTime", cpuSigTime,
 		"totalProcessingTime", totalTime,
 		"timestamp", time.Now().Format("2006-01-02 15:04:05.000"),
-	)
-
-	// Save enhanced performance data to files
-	logging.LogGPU("INFO", "ENHANCED GPU TRANSACTION BATCH COMPLETED",
-		"batchSize", count,
-		"validTransactions", validCount,
-		"successfulExecutions", successCount,
-		"revertedExecutions", revertCount,
-		"outOfGasExecutions", outOfGasCount,
-		"invalidTransactions", invalidCount,
-		"gpuType", p.gpuType,
-		"batchTPS", tps,
-		"gpuKernelTime", gpuProcessingTime,
-		"totalProcessingTime", totalTime,
-	)
-
-	logging.LogPerformance("INFO", "ENHANCED BATCH PERFORMANCE METRICS",
-		"batchSize", count,
-		"batchTPS", tps,
-		"processingMode", "Enhanced GPU",
-		"kernelTime", gpuProcessingTime,
-		"totalTime", totalTime,
-	)
-
-	logging.LogTransaction("INFO", "ENHANCED TRANSACTION BATCH PROCESSED",
-		"batchSize", count,
-		"validTransactions", validCount,
-		"successfulExecutions", successCount,
-		"revertedExecutions", revertCount,
-		"outOfGasExecutions", outOfGasCount,
-		"invalidTransactions", invalidCount,
-		"processingMode", "Enhanced GPU",
 	)
 
 	log.Debug("Enhanced GPU transaction processing completed successfully",
