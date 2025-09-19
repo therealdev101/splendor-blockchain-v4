@@ -15,7 +15,7 @@ RPC (Remote Procedure Call) nodes provide read-only access to the blockchain net
 - **CPU**: 16+ cores (32+ threads), Intel i5-13500 or equivalent
 - **RAM**: 32GB+ DDR4 recommended
 - **Storage**: 2TB+ NVMe SSD (enterprise grade for high TPS)
-- **Network**: Gigabit+ connection for 100K+ TPS handling
+- **Network**: Gigabit+ connection for high-throughput handling
 - **OS**: Ubuntu 20.04 LTS or 22.04 LTS
 
 **RPC Features:**

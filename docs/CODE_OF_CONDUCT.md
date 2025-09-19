@@ -27,7 +27,7 @@ Our community is focused on:
 - **AI Innovation**: Advancing MobileLLM-R1-950M integration and optimization
 - **GPU Performance**: Maximizing RTX 4000 SFF Ada capabilities
 - **Parallel Processing**: Improving multi-core transaction processing
-- **High Performance**: Achieving and exceeding 100K+ TPS targets
+- **High Performance**: Achieving and exceeding high-throughput targets
 - **Technical Excellence**: Building the best AI-powered blockchain
 
 ## 🔧 Technical Discussions

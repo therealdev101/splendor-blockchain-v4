@@ -10,13 +10,13 @@ A high-performance blockchain combining AI optimization, GPU acceleration, and a
 
 ## Overview
 
-Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combines artificial intelligence with high-performance computing to deliver enhanced transaction throughput and intelligent system optimization. The network achieves verified performance of 2.35M TPS with full EVM compatibility.
+Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combines artificial intelligence with high-performance computing to deliver enhanced transaction throughput and intelligent system optimization. The system is designed for high throughput while preserving EVM correctness; current single-node benchmarks show sustained 80–100K TPS end-to-end on standard hardware, with higher ingest/prevalidation rates under load.
 
 ### Key Features
 
 - **AI-Powered Optimization**: MobileLLM-R1-950M for real-time load balancing (optional)
 - **GPU Acceleration**: CUDA/OpenCL support with RTX 4000 SFF Ada optimization
-- **High Performance**: 500K-2M+ TPS with AI optimization
+- **High Performance**: 80–150K+ TPS on a single node (end-to-end), higher with horizontal scaling and hardware upgrades
 - **Intelligent Load Balancing**: AI-driven CPU/GPU resource allocation
 - **Predictive Analytics**: AI transaction pattern prediction and batch optimization
 - **Hybrid Processing**: Seamless CPU/GPU/AI coordination
@@ -29,71 +29,68 @@ Splendor Blockchain V4 is an AI-optimized, GPU-accelerated blockchain that combi
 
 ### Verified Throughput
 
-**Current Performance:**
-- **Baseline TPS**: 159K (previous limit)
-- **AI-Optimized TPS**: 500K-2M+ sustained
-- **Block Time**: 1 second
-- **Latency**: 15-25ms average (AI-optimized)
-- **GPU Utilization**: 95-98% (AI-managed)
+Current single-node benchmarks on standard validator hardware:
+- 80,000 TPS: sustained benchmark window
+- 100,000 TPS: sustained benchmark window
+- Block time: 1 second
+- Latency: 15–25ms average (under load)
 
-### EVM Blockchain Performance Comparison
-
-| Blockchain | TPS | EVM Compatible | Performance Multiplier |
-|------------|-----|----------------|----------------------|
-| Ethereum | ~15 | ✅ | 1x (EVM Baseline) |
-| Polygon | ~7K | ✅ | 467x |
-| Arbitrum | ~4K | ✅ | 267x |
-| Optimism | ~2K | ✅ | 133x |
-| BSC | ~300 | ✅ | 20x |
-| **Splendor AI** | **2.35M Verified** | **✅** | **156,667x** |
+### Notes on measurement
+Throughput figures refer to end-to-end state-commit throughput. GPU is used for prevalidation/scheduling; final state transitions are executed and committed by the CPU EVM for consensus safety.
 
 ## Performance Documentation
 
 ### Verified Performance Results
 
-![TPS Benchmark Results](images/tpsreport1.jpeg)
-
-*80,000 and 100,000 TPS benchmark results from mainnet testing environment*
-
-![100K TPS Achievement](images/100kTPS.jpeg)
-
-*100,000 TPS verified performance - Sustained high-throughput blockchain processing*
-
-![200K TPS Breakthrough](images/200kTPS.jpeg)
-
-*200,000 TPS achievement - Advanced blockchain performance milestone*
-
-![250K TPS Performance](images/250kTPS.jpeg)
-
-*250,000 TPS sustained performance - Next-generation blockchain capabilities*
-
-![400K TPS Achievement](images/400kTPS.jpeg)
-
-*400,000 TPS breakthrough - High-performance blockchain processing*
-
-![824K TPS Console Proof](images/824kTPS.jpeg)
-
-*Live console showing 824,000 transactions in block 21018 - Verified blockchain performance*
-
-![2.35M TPS Peak](images/2.35mTPS.jpeg)
-
-*2.35 Million TPS peak performance - Advanced blockchain throughput*
+*Benchmark screenshots available upon request.*
 
 ### Performance Validation
 
 **Verified Metrics:**
-- **100,000 TPS**: Sustained throughput over 1 second duration
-- **200,000 TPS**: Advanced performance demonstration
-- **250,000 TPS**: High-performance capabilities
-- **400,000 TPS**: Enterprise-grade blockchain performance
-- **824,000 TPS**: Verified high-throughput achievement
-- **2.35M TPS**: Peak performance capability
+- 80,000 TPS: sustained throughput over a benchmark window
+- 100,000 TPS: sustained throughput over a benchmark window
 
 **Testing Environment:**
 - **Hardware**: NVIDIA RTX 4000 SFF Ada Generation (20GB VRAM)
 - **AI Optimization**: MobileLLM-R1-950M load balancer active
 - **GPU Utilization**: 95-98% efficiency (AI-managed)
 - **Network**: Mainnet configuration with Congress consensus
+
+## How We Achieve High TPS
+
+Splendor’s throughput comes from a modernized execution pipeline that keeps the CPU EVM saturated while the GPU pre-validates work in parallel. Final state transitions remain 100% EVM-correct and are committed by the canonical CPU executor.
+
+- GPU prevalidation pipeline
+  - RLP decode, hashing and structural/signature checks run on the GPU in large batches. See kernel launch and triple‑buffered CUDA streams: Core-Blockchain/node_src/common/gpu/cuda_kernels.cu:640
+  - The GPU returns advisory validity, gas estimates and metadata; CPU remains the source of truth for state writes.
+
+- Hybrid scheduler (CPU/GPU)
+  - Adaptive strategy chooses CPU‑only, GPU‑only, or hybrid based on live utilization and latency: Core-Blockchain/node_src/common/hybrid/hybrid_processor.go:292
+  - Per‑sender conflict‑free slicing keeps GPU kernels within target runtime while maximizing occupancy: Core-Blockchain/node_src/common/gpu/gpu_processor.go:1246
+
+- Parallel state execution on CPU
+  - After GPU prevalidation, validated txs are applied via a high‑throughput parallel state processor. The authoritative state transition is still CPU EVM.
+  - Canonical EVM apply path: Core-Blockchain/node_src/miner/worker.go:1004; GPU batch entry in miner: Core-Blockchain/node_src/miner/worker.go:1118
+
+- Aggressive but safe batching
+  - Large txn batches, pinned host memory, and overlapping copy/compute (CUDA streams) minimize PCIe overhead and keep accelerators busy.
+  - Adaptive batch sizing reacts to real‑time TPS and utilization.
+
+- Optional AI assistance
+  - A lightweight local model (MobileLLM‑R1‑950M) can nudge ratios and batch sizes under heavy load. The blockchain remains fully deterministic without AI.
+
+What’s different from traditional EVM chains
+- We don’t attempt to run the full EVM on the GPU. Instead, we offload the expensive prevalidation/scheduling phases so the CPU EVM can commit state continuously.
+- GPU and CPU work in parallel (producer/consumer) rather than serial; this overlap is where the throughput gain comes from.
+- Per‑sender scheduling avoids common write conflicts, improving both GPU kernel efficiency and CPU apply success rate.
+
+Safety model (unchanged consensus)
+- Final state transitions are executed and committed by the canonical CPU EVM. If the GPU ever mislabels a tx, the CPU apply rejects it; worst case is a performance loss, not a consensus fault. See `core.ApplyTransaction`: Core-Blockchain/node_src/miner/worker.go:1004
+- GPU use is transparent and optional. On any GPU error, the system falls back to CPU with no change to consensus rules.
+
+How to verify on your node
+- Runtime logs: look for “Processing GPU batch” and “GPU TRANSACTION PROCESSING ACTIVATED” when load is high: Core-Blockchain/node_src/common/gpu/gpu_processor.go:927
+- RPC: call `gpu_getGPUStats` to confirm `available=true`, type=`CUDA/OpenCL`, and `processedTxs` increasing: Core-Blockchain/node_src/internal/ethapi/api_gpu.go:60
 
 ## Network Information
 
@@ -168,7 +165,7 @@ Splendor uses an AI-enhanced Proof of Authority consensus called "Congress":
 - AI-optimized finality with 1 second confirmation
 - AI-monitored Byzantine fault tolerance
 - Energy efficient (no wasteful mining)
-- AI-managed scalability up to 2M+ TPS
+- Scalable throughput via batching and hybrid scheduling
 
 ## Development Tools
 
@@ -218,7 +215,7 @@ Splendor uses an AI-enhanced Proof of Authority consensus called "Congress":
 ### ✅ Completed (2025)
 - **AI Load Balancer Integration**: MobileLLM-R1-950M AI system deployed and operational
 - **GPU Acceleration**: RTX 4000 SFF Ada optimization with CUDA/OpenCL support
-- **High-Performance Achievement**: Verified 2.35M TPS with 824K sustained throughput
+- **High-Performance Achievement**: Verified 80–100K TPS single-node benchmarks; ongoing throughput improvements
 - **Hybrid Processing**: CPU/GPU/AI coordination system implemented
 - **Congress Consensus**: AI-enhanced PoA consensus with Byzantine fault tolerance
 - **Mainnet Deployment**: Live network with verified performance metrics
