@@ -183,10 +183,10 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	PriceLimit: 1,
 	PriceBump:  10,
 
-	AccountSlots: 1000000,     // 1M per account - single account can send 1M transactions
-	GlobalSlots:  10000000,    // 10M pending transactions - supports 10 accounts × 1M each
-	AccountQueue: 500000,      // 500K queued per account - massive queue capacity
-	GlobalQueue:  5000000,     // 5M queued transactions - total queue capacity
+	AccountSlots: 16,   // Align with go-ethereum defaults to keep per-account pending sets bounded
+	GlobalSlots:  4096, // Match upstream default pending pool capacity across all accounts
+	AccountQueue: 64,   // Default future queue allowance per account
+	GlobalQueue:  1024, // Total future queue capacity before global eviction kicks in
 
 	Lifetime: 3 * time.Hour,
 
@@ -1268,10 +1268,20 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 // reset retrieves the current state of the blockchain and ensures the content
 // of the transaction pool is valid with regard to the chain state.
 func (pool *TxPool) reset(oldHead, newHead *types.Header) {
-	log.Info("TxPool reset called", 
-		"oldHead", func() string { if oldHead != nil { return oldHead.Hash().Hex()[:8] }; return "nil" }(),
+	log.Info("TxPool reset called",
+		"oldHead", func() string {
+			if oldHead != nil {
+				return oldHead.Hash().Hex()[:8]
+			}
+			return "nil"
+		}(),
 		"newHead", newHead.Hash().Hex()[:8],
-		"oldNum", func() uint64 { if oldHead != nil { return oldHead.Number.Uint64() }; return 0 }(),
+		"oldNum", func() uint64 {
+			if oldHead != nil {
+				return oldHead.Number.Uint64()
+			}
+			return 0
+		}(),
 		"newNum", newHead.Number.Uint64())
 
 	// If we're reorging an old state, reinject all dropped transactions
@@ -1283,11 +1293,11 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 		newBlock := pool.chain.GetBlock(newHead.Hash(), newHead.Number.Uint64())
 		if newBlock != nil {
 			includedTxs := newBlock.Transactions()
-			log.Info("Normal block progression - removing included transactions from pool", 
-				"count", len(includedTxs), 
+			log.Info("Normal block progression - removing included transactions from pool",
+				"count", len(includedTxs),
 				"block", newHead.Number.Uint64(),
 				"poolPending", pool.all.Count())
-			
+
 			removedCount := 0
 			// Remove all transactions that were included in the new block
 			for i, tx := range includedTxs {
@@ -1302,8 +1312,8 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 					}
 				}
 			}
-			log.Info("Completed removing transactions from pool", 
-				"removed", removedCount, 
+			log.Info("Completed removing transactions from pool",
+				"removed", removedCount,
 				"poolPendingAfter", pool.all.Count())
 		}
 	} else if oldHead != nil && oldHead.Hash() != newHead.ParentHash {
@@ -1605,6 +1615,7 @@ func (pool *TxPool) truncateQueue() {
 		}
 	}
 }
+
 // demoteUnexecutables removes invalid and processed transactions from the pools
 // executable/pending queue and any subsequent transactions that become unexecutable
 // are moved back into the future queue.

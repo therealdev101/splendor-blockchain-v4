@@ -58,6 +58,30 @@ func init() {
 	eip1559Config.LondonBlock = common.Big0
 }
 
+func TestDefaultTxPoolConfigLimits(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wantAccountSlots = 16
+		wantGlobalSlots  = 4096
+		wantAccountQueue = 64
+		wantGlobalQueue  = 1024
+	)
+
+	if DefaultTxPoolConfig.AccountSlots != wantAccountSlots {
+		t.Fatalf("default account slots mismatch: have %d, want %d", DefaultTxPoolConfig.AccountSlots, wantAccountSlots)
+	}
+	if DefaultTxPoolConfig.GlobalSlots != wantGlobalSlots {
+		t.Fatalf("default global slots mismatch: have %d, want %d", DefaultTxPoolConfig.GlobalSlots, wantGlobalSlots)
+	}
+	if DefaultTxPoolConfig.AccountQueue != wantAccountQueue {
+		t.Fatalf("default account queue mismatch: have %d, want %d", DefaultTxPoolConfig.AccountQueue, wantAccountQueue)
+	}
+	if DefaultTxPoolConfig.GlobalQueue != wantGlobalQueue {
+		t.Fatalf("default global queue mismatch: have %d, want %d", DefaultTxPoolConfig.GlobalQueue, wantGlobalQueue)
+	}
+}
+
 type testBlockChain struct {
 	gasLimit      uint64 // must be first field for 64 bit alignment (atomic access)
 	statedb       *state.StateDB

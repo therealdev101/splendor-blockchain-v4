@@ -81,3 +81,26 @@ Wait until you see a hammer icon or "mined potential block" in the output.
 ### 14. Detach from Session
 To detach from the session (and leave the node running):
 Press `CTRL + b`, release both keys, then press `d`.
+
+## ⚙️ Transaction Pool Defaults
+
+Splendor validators now inherit the upstream go-ethereum transaction pool sizing to
+keep memory usage predictable and protect against spam bursts. The new defaults are:
+
+- `--txpool.accountslots=16`
+- `--txpool.globalslots=4096`
+- `--txpool.accountqueue=64`
+- `--txpool.globalqueue=1024`
+
+These limits match the values baked into `eth/ethconfig` and the `node-start.sh`
+helper, so no manual action is needed for typical workloads. If you operate a relay
+or other high-volume service and need to relax the caps, pass larger values to the
+same CLI flags when launching `geth`, for example:
+
+```bash
+./node_src/build/bin/geth ... --txpool.accountslots=64 --txpool.globalslots=8192 \
+  --txpool.accountqueue=256 --txpool.globalqueue=4096
+```
+
+Raising these thresholds increases memory pressure and the cost of reorganisations,
+so scale them carefully and monitor the node after any changes.
