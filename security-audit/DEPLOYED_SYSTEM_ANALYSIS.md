@@ -1,7 +1,7 @@
 # Splendor Blockchain Deployed System Analysis - CORRECTED
 
 **Analysis Date:** January 11, 2025  
-**Network:** Splendor Mainnet (Chain ID: 2691)  
+**Network:** Splendor Mainnet (Chain ID: 6546)
 **RPC:** https://mainnet-rpc.splendor.org/
 
 ---

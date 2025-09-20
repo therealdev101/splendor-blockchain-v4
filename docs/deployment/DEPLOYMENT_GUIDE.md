@@ -6,7 +6,7 @@ This guide provides comprehensive instructions for deploying the Splendor RPC bl
 
 Splendor RPC is a DPoS (Delegated Proof of Stake) blockchain with the following key features:
 
-- **Chain ID**: 2691
+- **Chain ID**: 6546
 - **Network Name**: Splendor RPC
 - **RPC URL**: https://mainnet-rpc.splendor.org
 - **Initial Supply**: 26,000,000,000 SPLD (26 billion tokens)
@@ -44,7 +44,7 @@ Splendor RPC is a DPoS (Delegated Proof of Stake) blockchain with the following 
 ## Pre-Deployment Checklist
 
 ### 1. Core Blockchain Configuration
-- [x] Chain ID set to 2691
+- [x] Chain ID set to 6546
 - [x] Genesis file configured with 26B initial supply
 - [x] Minting address set to `0xF5BBDF432EcCCeF7eD8E96D643edB26D76390C84`
 - [x] Congress consensus parameters configured (1s block time, 200 block epochs)

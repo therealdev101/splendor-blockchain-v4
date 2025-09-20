@@ -23,7 +23,7 @@ This guide will help you connect MetaMask to the Splendor Blockchain V4 mainnet 
    |-------|-------|
    | **Network Name** | Splendor RPC |
    | **New RPC URL** | https://mainnet-rpc.splendor.org/ |
-   | **Chain ID** | 2691 |
+   | **Chain ID** | 6546 |
    | **Currency Symbol** | SPLD |
    | **Block Explorer URL** | https://explorer.splendor.org/ |
 
@@ -41,7 +41,7 @@ async function addSplendorMainnet() {
     await window.ethereum.request({
       method: 'wallet_addEthereumChain',
       params: [{
-        chainId: '0xA83', // 2691 in hex
+        chainId: '0x1992', // 6546 in hex
         chainName: 'Splendor RPC',
         nativeCurrency: {
           name: 'Splendor',
@@ -81,7 +81,7 @@ If bridging is available:
 ### Option 3: Receive from Others
 
 - **Wallet Address**: Share your MetaMask address to receive SPLD
-- **Verify Network**: Ensure sender is using Splendor mainnet (Chain ID 2691)
+- **Verify Network**: Ensure sender is using Splendor mainnet (Chain ID 6546)
 - **Check Balance**: Tokens should appear in your MetaMask wallet
 
 ## Verifying the Connection
@@ -96,7 +96,7 @@ If bridging is available:
    ethereum.request({
      method: 'eth_chainId'
    }).then(chainId => {
-     console.log('Connected to chain:', parseInt(chainId, 16)); // Should be 2691
+     console.log('Connected to chain:', parseInt(chainId, 16)); // Should be 6546
    });
    ```
 
@@ -144,7 +144,7 @@ if (typeof window.ethereum !== 'undefined') {
   
   // Check network
   const network = await provider.getNetwork();
-  if (network.chainId !== 2691) {
+  if (network.chainId !== 6546) {
     alert('Please switch to Splendor Mainnet');
   }
 }
@@ -234,7 +234,7 @@ if (typeof window.ethereum !== 'undefined') {
 - [ ] Network details are entered correctly
 - [ ] RPC endpoint is accessible
 - [ ] You have SPLD tokens for gas fees
-- [ ] You're on the correct network (Chain ID 2691)
+- [ ] You're on the correct network (Chain ID 6546)
 - [ ] Browser allows HTTPS connections
 - [ ] No firewall blocking connections
 

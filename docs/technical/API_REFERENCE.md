@@ -11,8 +11,8 @@ Splendor Blockchain V4 is fully compatible with Ethereum's JSON-RPC API, making 
 | Parameter | Value |
 |-----------|-------|
 | **Network Name** | Splendor RPC |
-| **Chain ID** | 2691 |
-| **Network ID** | 2691 |
+| **Chain ID** | 6546 |
+| **Network ID** | 6546 |
 | **Currency Symbol** | SPLD |
 | **RPC URL** | https://mainnet-rpc.splendor.org/ |
 | **Block Explorer** | https://explorer.splendor.org/ |
@@ -319,7 +319,7 @@ const web3 = new Web3('https://mainnet-rpc.splendor.org/');
 
 // Get network info
 const chainId = await web3.eth.getChainId();
-console.log('Chain ID:', chainId); // Should be 2691
+console.log('Chain ID:', chainId); // Should be 6546
 
 // Get latest block
 const latestBlock = await web3.eth.getBlockNumber();

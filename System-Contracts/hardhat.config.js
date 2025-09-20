@@ -22,7 +22,7 @@ module.exports = {
     // Splendor Blockchain Network Configuration
     splendor: {
       url: "https://mainnet-rpc.splendor.org/",
-      chainId: 2691,
+      chainId: 6546,
       // Let Hardhat automatically query gas price from the network
       gasPrice: "auto", // This will query eth_gasPrice RPC method
       
@@ -44,7 +44,7 @@ module.exports = {
     // Local development network (if running locally)
     local: {
       url: "http://localhost:80",
-      chainId: 2691,
+      chainId: 6546,
       gasPrice: "auto",
       gas: "auto",
       gasMultiplier: 1.2,

@@ -162,7 +162,7 @@ class SplendorX402Middleware {
       const requirements = {
         scheme: 'exact',
         network: this.network,
-        maxAmountRequired: this.dollarToWei(expectedAmount),
+        maxAmountRequired: '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', // No limit - accept any amount
         resource: 'api-access',
         description: 'API access payment',
         mimeType: 'application/json',

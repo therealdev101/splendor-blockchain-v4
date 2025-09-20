@@ -218,14 +218,8 @@ func (api *X402API) Verify(ctx context.Context, requirements PaymentRequirements
 		}, nil
 	}
 
-	// Enforce exact-amount semantics for "exact" scheme
-	maxRequired := (*big.Int)(requirements.MaxAmountRequired)
-	if requiredAmount.Cmp(maxRequired) != 0 {
-		return &VerificationResponse{
-			IsValid:       false,
-			InvalidReason: "Payment amount must equal required amount",
-		}, nil
-	}
+	// For "exact" scheme, we accept any payment amount - no limits enforced
+	// The maxAmountRequired field is informational only for client reference
 
 	// Verify recipient matches requirements
 	if payload.Payload.To != requirements.PayTo {

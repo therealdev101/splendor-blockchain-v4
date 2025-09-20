@@ -70,7 +70,7 @@ When you connect to the mainnet, the following services are available:
 
 - **Mainnet RPC**: Available at `https://mainnet-rpc.splendor.org/`
 - **Block Explorer**: Available at `https://explorer.splendor.org/`
-- **Chain ID**: 2691
+- **Chain ID**: 6546
 - **Currency**: SPLD tokens
 
 ## Running Your Own Node
