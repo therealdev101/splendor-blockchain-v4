@@ -78,6 +78,7 @@ func newTestBackendWithGenerator(blocks int, generator func(int, *core.BlockGen)
 	}
 	txconfig := core.DefaultTxPoolConfig
 	txconfig.Journal = "" // Don't litter the disk with test journals
+	txconfig.AsyncLocals = false
 
 	return &testBackend{
 		db:     db,

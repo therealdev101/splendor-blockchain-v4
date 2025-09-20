@@ -161,6 +161,8 @@ type TxPoolConfig struct {
 	Journal   string           // Journal of local transactions to survive node restarts
 	Rejournal time.Duration    // Time interval to regenerate the local transaction journal
 
+	AsyncLocals bool // Whether local transaction submissions wait for reorg completion
+
 	PriceLimit uint64 // Minimum gas price to enforce for acceptance into the pool
 	PriceBump  uint64 // Minimum price bump percentage to replace an already existing transaction (nonce)
 
@@ -179,6 +181,8 @@ type TxPoolConfig struct {
 var DefaultTxPoolConfig = TxPoolConfig{
 	Journal:   "transactions.rlp",
 	Rejournal: time.Hour,
+
+	AsyncLocals: true,
 
 	PriceLimit: 1,
 	PriceBump:  10,
@@ -893,10 +897,11 @@ func (pool *TxPool) promoteTx(addr common.Address, hash common.Hash, tx *types.T
 // AddLocals enqueues a batch of transactions into the pool if they are valid, marking the
 // senders as a local ones, ensuring they go around the local pricing constraints.
 //
-// This method is used to add transactions from the RPC API and performs synchronous pool
-// reorganization and event propagation.
+// This method is used to add transactions from the RPC API and performs pool reorganization,
+// optionally waiting for completion based on the AsyncLocals configuration.
 func (pool *TxPool) AddLocals(txs []*types.Transaction) []error {
-	return pool.addTxs(txs, !pool.config.NoLocals, true)
+	sync := !pool.config.AsyncLocals
+	return pool.addTxs(txs, !pool.config.NoLocals, sync)
 }
 
 // AddLocal enqueues a single local transaction into the pool if it is valid. This is

@@ -75,6 +75,7 @@ var (
 func init() {
 	testTxPoolConfig = core.DefaultTxPoolConfig
 	testTxPoolConfig.Journal = ""
+	testTxPoolConfig.AsyncLocals = false
 	ethashChainConfig = new(params.ChainConfig)
 	*ethashChainConfig = *params.TestChainConfig
 	cliqueChainConfig = new(params.ChainConfig)

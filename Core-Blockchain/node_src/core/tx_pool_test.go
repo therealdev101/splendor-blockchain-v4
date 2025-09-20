@@ -51,6 +51,7 @@ var (
 func init() {
 	testTxPoolConfig = DefaultTxPoolConfig
 	testTxPoolConfig.Journal = ""
+	testTxPoolConfig.AsyncLocals = false
 
 	cpy := *params.TestChainConfig
 	eip1559Config = &cpy
