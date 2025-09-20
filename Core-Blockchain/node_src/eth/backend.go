@@ -403,6 +403,11 @@ func (s *Ethereum) APIs() []rpc.API {
 			Version:   "1.0",
 			Service:   s.netRPCService,
 			Public:    true,
+		}, {
+			Namespace: "x402",
+			Version:   "1.0",
+			Service:   NewX402API(s),
+			Public:    true,
 		},
 	}...)
 }
